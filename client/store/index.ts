@@ -1,4 +1,9 @@
+import {
+  DoorDirectionCode,
+  DoorTypeCode,
+} from "#asciiflow/client/doors";
 import { DrawBox } from "#asciiflow/client/draw/box";
+import { DrawDoor } from "#asciiflow/client/draw/door";
 import { DrawFreeform } from "#asciiflow/client/draw/freeform";
 import { IDrawFunction } from "#asciiflow/client/draw/function";
 import { DrawLine } from "#asciiflow/client/draw/line";
@@ -21,6 +26,7 @@ export enum ToolMode {
   ARROWS = 6,
   LINES = 4,
   TEXT = 7,
+  DOOR = 8,
 }
 
 export interface IModifierKeys {
@@ -123,6 +129,8 @@ export interface AppState {
   // Tool state
   selectedToolMode: ToolMode;
   freeformCharacter: string;
+  doorType: DoorTypeCode;
+  doorDirection: DoorDirectionCode;
   altPressed: boolean;
   currentCursor: string;
   modifierKeys: IModifierKeys;
@@ -147,6 +155,8 @@ function initialState(): AppState {
     route: DrawingId.local(null),
     selectedToolMode: ToolMode.BOX,
     freeformCharacter: "x",
+    doorType: readPersistent<DoorTypeCode>("doorType", "SD"),
+    doorDirection: readPersistent<DoorDirectionCode>("doorDirection", "IL"),
     altPressed: false,
     currentCursor: "default",
     modifierKeys: {},
@@ -190,6 +200,7 @@ const arrowTool = new DrawLine(true);
 const selectTool = new DrawSelect();
 const freeformTool = new DrawFreeform();
 const textTool = new DrawText();
+const doorTool = new DrawDoor();
 const nullTool = new DrawNull();
 
 // ---------------------------------------------------------------------------
@@ -238,6 +249,7 @@ export const store = {
   selectTool,
   freeformTool,
   textTool,
+  doorTool,
   nullTool,
 
   // Route
@@ -254,6 +266,20 @@ export const store = {
   },
   setFreeformCharacter(value: string) {
     useAppStore.setState({ freeformCharacter: value });
+  },
+
+  // Door stamp settings (persistent)
+  get doorType() {
+    return useAppStore.getState().doorType;
+  },
+  setDoorType(value: DoorTypeCode) {
+    setPersistent("doorType", value);
+  },
+  get doorDirection() {
+    return useAppStore.getState().doorDirection;
+  },
+  setDoorDirection(value: DoorDirectionCode) {
+    setPersistent("doorDirection", value);
   },
 
   // Selected tool mode
@@ -289,6 +315,8 @@ export const store = {
       ? freeformTool
       : mode === ToolMode.TEXT
       ? textTool
+      : mode === ToolMode.DOOR
+      ? doorTool
       : mode === ToolMode.SELECT
       ? selectTool
       : nullTool;

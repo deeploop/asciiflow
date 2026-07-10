@@ -1,7 +1,20 @@
 import { ASCII, UNICODE } from "#asciiflow/client/constants";
+import {
+  DOOR_DIRECTIONS,
+  DOOR_LABEL_OFFSET,
+  DOOR_TYPES,
+  DoorTypeCode,
+  doorsToCsv,
+  doorTemplate,
+  nextDoorNumber,
+  parseDoorsCsv,
+  scanDoors,
+} from "#asciiflow/client/doors";
 import { ExportPanel } from "#asciiflow/client/export";
+import { Layer } from "#asciiflow/client/layer";
 import { DrawingId, store, ToolMode, useAppStore } from "#asciiflow/client/store";
 import { DrawingStringifier } from "#asciiflow/client/store/drawing_stringifier";
+import { textToLayer } from "#asciiflow/client/text_utils";
 import {
   Button,
   ControlledDialog,
@@ -54,6 +67,7 @@ const TOOLS: Array<{
   { mode: ToolMode.ARROWS, label: "arrow", testId: "tool-arrow", shortcut: "4", color: "var(--color-purple)" },
   { mode: ToolMode.LINES, label: "line", testId: "tool-line", shortcut: "5", color: "var(--color-accent)" },
   { mode: ToolMode.TEXT, label: "text", testId: "tool-text", shortcut: "6", color: "var(--color-warning)" },
+  { mode: ToolMode.DOOR, label: "door", testId: "tool-door", shortcut: "7", color: "var(--color-danger)" },
 ];
 
 // Helper: stop all keyboard event propagation so controller doesn't intercept
@@ -98,7 +112,11 @@ export function Toolbar() {
   const showFreeformPicker =
     !isShared && selectedToolMode === ToolMode.FREEFORM && panel === null;
 
-  const showSecondRow = panel !== null || showFreeformPicker;
+  // The door tool shows its type/direction picker the same way.
+  const showDoorPicker =
+    !isShared && selectedToolMode === ToolMode.DOOR && panel === null;
+
+  const showSecondRow = panel !== null || showFreeformPicker || showDoorPicker;
 
   return (
     <div className={styles.topBarWrapper}>
@@ -207,6 +225,7 @@ export function Toolbar() {
           {panel === "export" && <ExportPanel drawingId={route} />}
           {panel === "view" && <ViewPanel />}
           {showFreeformPicker && <DrawPanel />}
+          {showDoorPicker && <DoorPanel />}
         </div>
       )}
     </div>
@@ -384,6 +403,144 @@ function DrawPanel() {
 }
 
 // ---------------------------------------------------------------------------
+// Door panel — type / direction pickers + Excel (CSV) import/export
+// ---------------------------------------------------------------------------
+
+function downloadFile(filename: string, content: string) {
+  const blob = new Blob([content], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+function DoorPanel() {
+  const doorType = useAppStore((s) => s.doorType);
+  const doorDirection = useAppStore((s) => s.doorDirection);
+  const [toastMessage, setToastMessage] = useState<string>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  function handleExport() {
+    const doors = scanDoors(store.currentCanvas.committed);
+    if (doors.length === 0) {
+      setToastMessage("no doors on the canvas to export");
+      return;
+    }
+    const name = store.route.localId || "drawing";
+    downloadFile(`${name}-doors.csv`, doorsToCsv(doors));
+    setToastMessage(`exported ${doors.length} door(s) to csv`);
+  }
+
+  async function handleImport(file: File) {
+    const { doors, skipped } = parseDoorsCsv(await file.text());
+    if (doors.length === 0) {
+      setToastMessage("no valid door rows found in file");
+      return;
+    }
+    // Stamp every door into one layer so the whole import is a single undo.
+    const layer = new Layer();
+    const counters = new Map<DoorTypeCode, number>();
+    for (const row of doors) {
+      let num = row.num;
+      if (num === undefined) {
+        num =
+          counters.get(row.type) ??
+          nextDoorNumber(store.currentCanvas.committed, row.type);
+        counters.set(row.type, num + 1);
+      }
+      layer.setFrom(
+        textToLayer(
+          doorTemplate(row.type, row.direction, num),
+          row.position.subtract(DOOR_LABEL_OFFSET)
+        )
+      );
+    }
+    store.currentCanvas.setScratchLayer(layer);
+    store.currentCanvas.commitScratch();
+    setToastMessage(
+      `imported ${doors.length} door(s)` +
+        (skipped > 0 ? `, skipped ${skipped} row(s)` : "")
+    );
+  }
+
+  return (
+    <div className={styles.drawPanel}>
+      <div className={styles.doorRow}>
+        <span className={styles.viewLabel}>type:</span>
+        {DOOR_TYPES.map((type) => (
+          <button
+            key={type.code}
+            className={[
+              styles.doorBtn,
+              type.code === doorType ? styles.doorBtnActive : "",
+            ].filter(Boolean).join(" ")}
+            title={`${type.nameZh} ${type.nameEn}`}
+            onClick={() => store.setDoorType(type.code)}
+          >
+            {type.code} {type.nameZh}
+          </button>
+        ))}
+      </div>
+      <div className={styles.doorRow}>
+        <span className={styles.viewLabel}>swing:</span>
+        {DOOR_DIRECTIONS.map((direction) => (
+          <button
+            key={direction.code}
+            className={[
+              styles.doorBtn,
+              direction.code === doorDirection ? styles.doorBtnActive : "",
+            ].filter(Boolean).join(" ")}
+            title={`${direction.nameZh} ${direction.nameEn}`}
+            onClick={() => store.setDoorDirection(direction.code)}
+          >
+            {direction.code} {direction.nameZh}
+          </button>
+        ))}
+        <span className={styles.sep}>{"│"}</span>
+        <ActionBtn
+          color="var(--color-success)"
+          title="Export door schedule as Excel-compatible CSV (匯出門表)"
+          onClick={handleExport}
+        >
+          export excel
+        </ActionBtn>
+        <ActionBtn
+          color="var(--color-accent)"
+          title="Import door schedule from CSV (匯入門表)"
+          onClick={() => fileInputRef.current?.click()}
+        >
+          import excel
+        </ActionBtn>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".csv,.txt,text/csv"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) {
+              handleImport(file);
+            }
+            e.target.value = "";
+          }}
+        />
+      </div>
+      <div className={styles.drawHint}>
+        click the canvas to place a <strong>{doorType}-{doorDirection}</strong> door
+        {" │ "}keys <Kbd>1</Kbd>–<Kbd>6</Kbd> change type, arrow keys change swing
+      </div>
+      <Toast
+        open={toastMessage !== null}
+        message={toastMessage ?? ""}
+        onClose={() => setToastMessage(null)}
+      />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Help content (table layout with colored shortcuts and links)
 // ---------------------------------------------------------------------------
 
@@ -412,6 +569,8 @@ function HelpContent() {
         <span>drag start to end. <Kbd>shift</Kbd> changes orientation</span>
         <span style={{ color: "var(--color-warning)" }}>text</span>
         <span>click and type. <Kbd>enter</Kbd> commit, <Kbd>shift+enter</Kbd> newline</span>
+        <span style={{ color: "var(--color-danger)" }}>door</span>
+        <span>click to stamp a door symbol (SD/BS/LM/SL/FD/GD). export/import the door schedule as excel csv</span>
       </div>
       <div className={styles.helpDivider} />
       <div className={styles.helpSection}>navigation</div>

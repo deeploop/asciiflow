@@ -271,6 +271,40 @@
   color: var(--color-text);
 }
 
+/* --- Door panel (in second row) --- */
+
+.doorRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+  min-width: 0;
+}
+
+.doorBtn {
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+  padding: 2px 8px;
+  background: none;
+  border: 1px solid transparent;
+  color: var(--color-text);
+  cursor: pointer;
+  flex-shrink: 0;
+  outline: none;
+  white-space: nowrap;
+}
+
+.doorBtn:hover {
+  background: var(--color-bg-hover);
+  border-color: var(--color-border-light);
+}
+
+.doorBtnActive {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  font-weight: bold;
+}
+
 /* --- Character picker (in second row) --- */
 
 .charPicker {
