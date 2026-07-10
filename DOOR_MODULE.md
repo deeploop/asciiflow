@@ -154,8 +154,10 @@ FD,OR,30,12
 
 ## 8. 部署(GitHub Pages 測試環境)
 
-- 新增 workflow:push 到本分支時,以 Bazel 建置 `site/...`,產出上傳 `actions/deploy-pages` 部署。
-- 因 GitHub Pages 部署在子路徑 `https://deeploop.github.io/asciiflow/`,`index.html` 的 `/public/...` 絕對路徑改為相對路徑;App 本身使用 HashRouter,路由不受子路徑影響。
+- 新增 workflow(`.github/workflows/pages.yaml`):push 到本分支時,以 Bazel 建置 `site/...`,並將產出發佈到 `gh-pages` 分支(workflow 的 GITHUB_TOKEN 沒有權限直接透過 API 開啟 Pages,故採 gh-pages 分支模式)。
+- **首次需手動開啟一次**:GitHub 儲存庫 → Settings → Pages → Build and deployment → Source 選「Deploy from a branch」→ Branch 選 `gh-pages` / `/ (root)` → Save。之後每次 push 本分支即自動重新部署。
+- 測試網址:`https://deeploop.github.io/asciiflow/`。
+- 因部署在子路徑,`index.html` 的 `/public/...` 絕對路徑已改為相對路徑;App 使用 HashRouter,路由不受子路徑影響。已在本地以 Playwright 模擬 `/asciiflow/` 子路徑實測 gh-pages 分支的實際產出:資產零 404、門工具正常。
 - 正式版仍走原有 Cloudflare Pages workflow(main 分支),兩者互不干擾。
 
 ## 9. 已知限制與後續建議
