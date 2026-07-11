@@ -6,8 +6,8 @@ import {
 } from "#asciiflow/client/constants";
 import {
   DoorDirectionCode,
-  DOOR_TYPES,
   doorTemplate,
+  getDoorTypes,
   nextDoorNumber,
 } from "#asciiflow/client/doors";
 import { AbstractDrawFunction } from "#asciiflow/client/draw/function";
@@ -45,10 +45,13 @@ export class DrawDoor extends AbstractDrawFunction {
   }
 
   handleKey(value: string) {
-    // 1-6 selects the door type.
+    // 1-9 selects the door type by position (built-ins plus any loaded
+    // custom types, in registry order) — only reaches the first 9, since
+    // that's as far as a single digit key goes.
     const typeIndex = parseInt(value, 10) - 1;
-    if (typeIndex >= 0 && typeIndex < DOOR_TYPES.length) {
-      store.setDoorType(DOOR_TYPES[typeIndex].code);
+    const doorTypes = getDoorTypes();
+    if (typeIndex >= 0 && typeIndex < doorTypes.length) {
+      store.setDoorType(doorTypes[typeIndex].code);
     }
     // Arrows adjust the opening direction: ←/→ left/right, ↑/↓ outward/inward.
     const direction = store.doorDirection;

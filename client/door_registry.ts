@@ -1,10 +1,13 @@
 /**
- * Door type "quick-define" file — the single place to add a new door type.
+ * Door type "quick-define" file — the single place to add a *built-in* door
+ * type at compile time. Add one entry to DOOR_REGISTRY below and the toolbar
+ * menu, canvas stamping, keyboard shortcuts, and Excel import/export all
+ * pick it up automatically. No other file needs to change.
  *
- * Add one entry to DOOR_REGISTRY below and the toolbar menu, canvas
- * stamping, keyboard shortcuts, and Excel import/export all pick it up
- * automatically. No other file needs to change, and the TypeScript type
- * DoorTypeCode is derived from these keys — nothing to keep in sync by hand.
+ * For adding door types at *runtime* (no rebuild — load a .json/.txt file
+ * from the door panel), see setCustomDoorRegistry() below and the parser
+ * functions in doors.ts (parseDoorRegistryFile/Json/Text). Runtime-loaded
+ * types merge on top of these built-ins via getActiveDoorRegistry().
  *
  * See DOOR_TEMPLATE_FORMAT.md for the row1_formula grammar (a small, safe
  * expression language — not eval'd TypeScript) and DOOR_TEMPLATE_AI_PROMPT.md
@@ -62,7 +65,53 @@ export const DOOR_REGISTRY = {
   },
 } satisfies Record<string, DoorConfig>;
 
-/** Derived from the registry's own keys — adding an entry above extends this automatically. */
-export type DoorTypeCode = keyof typeof DOOR_REGISTRY;
+/** The compile-time built-in codes — always valid, known at compile time. */
+export type BuiltInDoorTypeCode = keyof typeof DOOR_REGISTRY;
 
-export const DOOR_TYPE_CODES = Object.keys(DOOR_REGISTRY) as DoorTypeCode[];
+/**
+ * A door type code once runtime-loaded custom types exist. This is
+ * deliberately widened to `string` rather than staying a literal union:
+ * custom codes are only known once a definition file has been loaded, so
+ * TypeScript cannot enumerate them at compile time. This is the real
+ * trade-off of dynamic loading — code that specifically wants "one of the
+ * built-ins" should use BuiltInDoorTypeCode instead.
+ */
+export type DoorTypeCode = string;
+
+export const DOOR_TYPE_CODES = Object.keys(DOOR_REGISTRY) as BuiltInDoorTypeCode[];
+
+// ---------------------------------------------------------------------------
+// Runtime-loaded custom door types (module-level state, not React state —
+// see doors.ts for the parsers that build a validated registry to pass here,
+// and store/index.ts for how this is made to trigger a re-render).
+// ---------------------------------------------------------------------------
+
+let customRegistry: Readonly<Record<string, DoorConfig>> = {};
+
+/** Built-ins merged with whatever custom registry is currently loaded (custom entries win on code collision). */
+export function getActiveDoorRegistry(): Record<string, DoorConfig> {
+  return { ...DOOR_REGISTRY, ...customRegistry };
+}
+
+export function getActiveDoorTypeCodes(): DoorTypeCode[] {
+  return Object.keys(getActiveDoorRegistry());
+}
+
+export function getCustomDoorRegistry(): Readonly<Record<string, DoorConfig>> {
+  return customRegistry;
+}
+
+/**
+ * Replaces the active custom registry. Callers are responsible for having
+ * validated every entry first (see validateDoorConfig in doors.ts) — this
+ * function does not re-validate, since the codes here also feed directly
+ * into RegExp construction elsewhere and an unvalidated code could break
+ * that (or worse, be a regex-injection vector).
+ */
+export function setCustomDoorRegistry(registry: Record<string, DoorConfig>) {
+  customRegistry = { ...registry };
+}
+
+export function clearCustomDoorRegistry() {
+  customRegistry = {};
+}

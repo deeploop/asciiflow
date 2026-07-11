@@ -1,0 +1,12 @@
+{
+  "DD": {
+    "name": "雙開彈簧門",
+    "englishName": "Double Swing Door",
+    "row1_formula": "'▼' + '─' * (W-2) + '▼'"
+  },
+  "RD": {
+    "name": "捲門",
+    "englishName": "Roller Shutter Door",
+    "row1_formula": "'▤' * W"
+  }
+}

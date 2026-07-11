@@ -1,4 +1,5 @@
 import {
+  clearCustomDoorRegistry,
   DOOR_DIRECTIONS,
   DOOR_LABEL_OFFSET,
   DOOR_REGISTRY,
@@ -6,10 +7,19 @@ import {
   doorLabel,
   doorTemplate,
   doorsToXlsxData,
+  getActiveDoorRegistry,
+  getActiveDoorTypeCodes,
+  getCustomDoorRegistry,
+  getDoorTypes,
   nextDoorNumber,
+  parseDoorRegistryFile,
+  parseDoorRegistryJson,
+  parseDoorRegistryText,
   parseDoorsWorkbook,
   renderDoorLine,
   scanDoors,
+  setCustomDoorRegistry,
+  validateDoorConfig,
 } from "#asciiflow/client/doors";
 import { Layer } from "#asciiflow/client/layer";
 import { textToLayer } from "#asciiflow/client/text_utils";
@@ -199,6 +209,177 @@ describe("doors", () => {
       expect(skipped).equals(0);
       expect(doors).to.have.length(2);
       expect(doors[1].type).equals("FD");
+    });
+  });
+
+  describe("custom (runtime-loaded) door registry", () => {
+    // customRegistry is module-level state shared across the whole test
+    // process, not per-test — every test here must leave it clean, or later
+    // tests (and other spec files bundled alongside this one) would see
+    // whatever the previous test loaded.
+    afterEach(() => clearCustomDoorRegistry());
+
+    const validConfig = { name: "雙開彈簧門", englishName: "Double Swing Door", row1_formula: "'▼' + '─' * (W-2) + '▼'" };
+
+    describe("validateDoorConfig", () => {
+      it("accepts a well-formed config", () => {
+        expect(validateDoorConfig("DD", validConfig)).equals(null);
+      });
+
+      it("rejects malformed codes — including ones that would corrupt the scanning regex", () => {
+        expect(validateDoorConfig("dd", validConfig)).is.a("string"); // lowercase
+        expect(validateDoorConfig("DOOR1", validConfig)).is.a("string"); // too long / has a digit
+        expect(validateDoorConfig("D-D", validConfig)).is.a("string"); // hyphen
+        // Regex-metacharacter codes are exactly what VALID_DOOR_CODE exists to block.
+        expect(validateDoorConfig(".*", validConfig)).is.a("string");
+        expect(validateDoorConfig("(SD)", validConfig)).is.a("string");
+      });
+
+      it("rejects missing required fields", () => {
+        expect(validateDoorConfig("DD", { ...validConfig, name: "" })).is.a("string");
+        expect(validateDoorConfig("DD", { ...validConfig, englishName: "  " })).is.a("string");
+        expect(validateDoorConfig("DD", { ...validConfig, row1_formula: "" })).is.a("string");
+      });
+
+      it("rejects a formula that fails to parse", () => {
+        const error = validateDoorConfig("DD", { ...validConfig, row1_formula: "not a formula" });
+        expect(error).contains("解析失敗");
+      });
+
+      it("rejects a formula whose output width doesn't match W", () => {
+        // Missing one end-cap character relative to the width it claims.
+        const error = validateDoorConfig("DD", {
+          ...validConfig,
+          row1_formula: "'▼' + '─' * (W-2)", // only accounts for W-2+1, one short
+        });
+        expect(error).contains("必須恰好是");
+      });
+    });
+
+    describe("parseDoorRegistryJson", () => {
+      it("parses a valid multi-entry object", () => {
+        const { registry, errors } = parseDoorRegistryJson(
+          JSON.stringify({ DD: validConfig, RD: { name: "捲門", englishName: "Roller Shutter", row1_formula: "'▤' * W" } })
+        );
+        expect(errors).to.have.length(0);
+        expect(Object.keys(registry).sort()).to.deep.equal(["DD", "RD"]);
+      });
+
+      it("uppercases codes and reports malformed JSON distinctly from invalid entries", () => {
+        const { registry, errors } = parseDoorRegistryJson(JSON.stringify({ dd: validConfig }));
+        expect(registry).to.have.property("DD");
+        expect(errors).to.have.length(0);
+
+        const broken = parseDoorRegistryJson("{ not valid json");
+        expect(broken.errors[0]).contains("JSON 格式錯誤");
+
+        const notAnObject = parseDoorRegistryJson("[1,2,3]");
+        expect(notAnObject.errors[0]).contains("最外層必須是一個物件");
+      });
+
+      it("loads valid entries and reports invalid ones independently (partial success)", () => {
+        const { registry, errors } = parseDoorRegistryJson(
+          JSON.stringify({
+            DD: validConfig,
+            BAD: { name: "", englishName: "x", row1_formula: "'x' * W" }, // missing name
+          })
+        );
+        expect(registry).to.have.property("DD");
+        expect(registry).to.not.have.property("BAD");
+        expect(errors).to.have.length(1);
+      });
+    });
+
+    describe("parseDoorRegistryText", () => {
+      it("parses the block format, one door per block", () => {
+        const text = [
+          "=== DOOR: DD ===",
+          "name: 雙開彈簧門",
+          "englishName: Double Swing Door",
+          "row1_formula: '▼' + '─' * (W-2) + '▼'",
+          "",
+          "=== DOOR: RD ===",
+          "name: 捲門",
+          "englishName: Roller Shutter Door",
+          "row1_formula: '▤' * W",
+        ].join("\n");
+        const { registry, errors } = parseDoorRegistryText(text);
+        expect(errors).to.have.length(0);
+        expect(registry.DD.name).equals("雙開彈簧門");
+        expect(registry.RD.englishName).equals("Roller Shutter Door");
+      });
+
+      it("flags unknown fields and unparsable lines without losing other blocks", () => {
+        const text = [
+          "=== DOOR: DD ===",
+          "name: 雙開彈簧門",
+          "englishName: Double Swing Door",
+          "row1_formula: '▼' + '─' * (W-2) + '▼'",
+          "not a field line at all",
+          "colour: black", // unknown field
+          "=== DOOR: RD ===",
+          "name: 捲門",
+          "englishName: Roller Shutter Door",
+          "row1_formula: '▤' * W",
+        ].join("\n");
+        const { registry, errors } = parseDoorRegistryText(text);
+        expect(registry).to.have.property("DD");
+        expect(registry).to.have.property("RD");
+        expect(errors.some((e) => e.includes("看不懂"))).equals(true);
+        expect(errors.some((e) => e.includes("未知欄位"))).equals(true);
+      });
+
+      it("ignores stray text before the first block header", () => {
+        const { registry } = parseDoorRegistryText(
+          "some preamble\n=== DOOR: DD ===\nname: x\nenglishName: y\nrow1_formula: 'x' * W"
+        );
+        expect(registry).to.have.property("DD");
+      });
+    });
+
+    describe("parseDoorRegistryFile (format auto-detection)", () => {
+      it("routes JSON-looking text to the JSON parser", () => {
+        const { registry } = parseDoorRegistryFile(JSON.stringify({ DD: validConfig }));
+        expect(registry).to.have.property("DD");
+      });
+
+      it("routes everything else to the text-block parser", () => {
+        const { registry } = parseDoorRegistryFile(
+          "=== DOOR: DD ===\nname: x\nenglishName: y\nrow1_formula: 'x' * W"
+        );
+        expect(registry).to.have.property("DD");
+      });
+    });
+
+    describe("merging into the active registry", () => {
+      it("merges custom types on top of built-ins", () => {
+        setCustomDoorRegistry({ DD: validConfig });
+        expect(getActiveDoorTypeCodes()).to.include.members(["SD", "BS", "LM", "SL", "FD", "GD", "DD"]);
+        expect(getDoorTypes().map((t) => t.code)).to.include("DD");
+      });
+
+      it("lets a custom entry override a built-in code (custom wins)", () => {
+        setCustomDoorRegistry({ SD: { ...validConfig, name: "自訂懸吊門" } });
+        expect(getActiveDoorRegistry().SD.name).equals("自訂懸吊門");
+        // The built-in registry itself is untouched.
+        expect(DOOR_REGISTRY.SD.name).equals("懸吊門");
+      });
+
+      it("clearCustomDoorRegistry restores built-ins-only", () => {
+        setCustomDoorRegistry({ DD: validConfig });
+        clearCustomDoorRegistry();
+        expect(getActiveDoorTypeCodes()).to.deep.equal(Object.keys(DOOR_REGISTRY));
+        expect(getCustomDoorRegistry()).to.deep.equal({});
+      });
+
+      it("a custom door type stamps and scans correctly end-to-end", () => {
+        setCustomDoorRegistry({ DD: validConfig });
+        const template = doorTemplate("DD", "IL", 1);
+        const layer = textToLayer(template, new Vector(0, 0));
+        const doors = scanDoors(layer);
+        expect(doors).to.have.length(1);
+        expect(doors[0].type).equals("DD");
+      });
     });
   });
 });

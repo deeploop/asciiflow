@@ -1,9 +1,15 @@
 import { Box } from "#asciiflow/client/common";
 import {
+  BuiltInDoorTypeCode,
+  clearCustomDoorRegistry,
   DOOR_REGISTRY,
   DOOR_TYPE_CODES,
   DoorConfig,
   DoorTypeCode,
+  getActiveDoorRegistry,
+  getActiveDoorTypeCodes,
+  getCustomDoorRegistry,
+  setCustomDoorRegistry,
 } from "#asciiflow/client/door_registry";
 import { ILayerView } from "#asciiflow/client/layer";
 import { layerToText } from "#asciiflow/client/text_utils";
@@ -17,11 +23,21 @@ import * as XLSX from "xlsx";
  * The canvas itself is the source of truth: doors are identified by their
  * label (e.g. "SD01-IL") wherever it appears, so there is no separate object
  * model to keep in sync. Door types themselves live in door_registry.ts —
- * this file re-exports them so existing imports keep working.
+ * this file re-exports them so existing imports keep working, and adds the
+ * formula-based validation that custom (runtime-loaded) door types go
+ * through before they're accepted (see "Custom door registry" below).
  */
 
-export { DOOR_REGISTRY, DOOR_TYPE_CODES };
-export type { DoorConfig, DoorTypeCode };
+export {
+  clearCustomDoorRegistry,
+  DOOR_REGISTRY,
+  DOOR_TYPE_CODES,
+  getActiveDoorRegistry,
+  getActiveDoorTypeCodes,
+  getCustomDoorRegistry,
+  setCustomDoorRegistry,
+};
+export type { BuiltInDoorTypeCode, DoorConfig, DoorTypeCode };
 
 export type DoorDirectionCode = "IL" | "IR" | "OL" | "OR";
 
@@ -32,11 +48,26 @@ export interface IDoorType {
   nameEn: string;
 }
 
+/** Built-in door types only — a fixed list, computed once at module load. */
 export const DOOR_TYPES: IDoorType[] = DOOR_TYPE_CODES.map((code) => ({
   code,
   nameZh: DOOR_REGISTRY[code].name,
   nameEn: DOOR_REGISTRY[code].englishName,
 }));
+
+/**
+ * Built-ins plus whatever custom door types are currently loaded. Computed
+ * fresh on every call (not cached) since the custom registry can change at
+ * runtime — call this from inside a render, not into a module-level const.
+ */
+export function getDoorTypes(): IDoorType[] {
+  const registry = getActiveDoorRegistry();
+  return getActiveDoorTypeCodes().map((code) => ({
+    code,
+    nameZh: registry[code].name,
+    nameEn: registry[code].englishName,
+  }));
+}
 
 export interface IDoorDirection {
   code: DoorDirectionCode;
@@ -54,7 +85,7 @@ export const DOOR_DIRECTIONS: IDoorDirection[] = [
 ];
 
 export function doorType(code: DoorTypeCode): IDoorType {
-  return DOOR_TYPES.find((type) => type.code === code);
+  return getDoorTypes().find((type) => type.code === code);
 }
 
 export function doorDirection(code: DoorDirectionCode): IDoorDirection {
@@ -198,12 +229,16 @@ export function doorTemplate(
   direction: DoorDirectionCode,
   num: number
 ): string {
+  const config = getActiveDoorRegistry()[type];
+  if (!config) {
+    throw new Error(`unknown door type: ${type}`);
+  }
   const interior = ` ${doorLabel(type, num, direction)} ${
     doorDirection(direction).glyph
   } `;
   const width = interior.length + 2;
   return [
-    renderDoorLine(DOOR_REGISTRY[type].row1_formula, width),
+    renderDoorLine(config.row1_formula, width),
     "┌" + "─".repeat(interior.length) + "┐",
     "│" + interior + "│",
     "└" + "─".repeat(interior.length) + "┘",
@@ -222,13 +257,17 @@ export interface IDoorInstance {
   position: Vector;
 }
 
-// Built from DOOR_TYPE_CODES rather than hardcoded, so a new door_registry.ts
-// entry is picked up here without touching this file.
-const DOOR_TYPE_ALTERNATION = DOOR_TYPE_CODES.join("|");
-const DOOR_LABEL_REGEX = new RegExp(
-  `(${DOOR_TYPE_ALTERNATION})(\\d+)-(IL|IR|OL|OR)`,
-  "g"
-);
+// Built from the *active* type codes (built-ins + whatever's currently
+// loaded) rather than hardcoded, and rebuilt on every call rather than
+// cached — a custom registry can be loaded at any time, so a frozen
+// module-level regex would miss types added after the app started.
+function doorTypeAlternation(): string {
+  return getActiveDoorTypeCodes().join("|");
+}
+
+function doorLabelRegex(): RegExp {
+  return new RegExp(`(${doorTypeAlternation()})(\\d+)-(IL|IR|OL|OR)`, "g");
+}
 
 /** Finds all door labels on a layer, with their absolute cell positions. */
 export function scanDoors(layer: ILayerView): IDoorInstance[] {
@@ -246,8 +285,9 @@ export function scanDoors(layer: ILayerView): IDoorInstance[] {
   });
   const text = layerToText(layer, new Box(start, end));
   const doors: IDoorInstance[] = [];
+  const labelRegex = doorLabelRegex();
   text.split("\n").forEach((line, row) => {
-    for (const match of line.matchAll(DOOR_LABEL_REGEX)) {
+    for (const match of line.matchAll(labelRegex)) {
       doors.push({
         type: match[1] as DoorTypeCode,
         num: parseInt(match[2], 10),
@@ -288,11 +328,12 @@ interface IDoorScheduleRow {
 }
 
 function doorsToScheduleRows(doors: IDoorInstance[]): IDoorScheduleRow[] {
+  const registry = getActiveDoorRegistry();
   return doors.map((door) => ({
     編號: `${door.type}${String(door.num).padStart(2, "0")}`,
     代號: door.type,
-    中文名稱: DOOR_REGISTRY[door.type].name,
-    英文名稱: DOOR_REGISTRY[door.type].englishName,
+    中文名稱: registry[door.type]?.name ?? door.type,
+    英文名稱: registry[door.type]?.englishName ?? door.type,
     開向代號: door.direction,
     開向: doorDirection(door.direction).nameZh,
     X: door.position.x,
@@ -340,12 +381,13 @@ export interface IDoorImportResult {
   skipped: number;
 }
 
-const TYPE_FIELD = new RegExp(`^(${DOOR_TYPE_ALTERNATION})$`, "i");
+function typeFieldRegex(): RegExp {
+  return new RegExp(`^(${doorTypeAlternation()})$`, "i");
+}
 const DIRECTION_FIELD = /^(IL|IR|OL|OR)$/i;
-const LABEL_FIELD = new RegExp(
-  `^(${DOOR_TYPE_ALTERNATION})(\\d+)(?:-(IL|IR|OL|OR))?$`,
-  "i"
-);
+function labelFieldRegex(): RegExp {
+  return new RegExp(`^(${doorTypeAlternation()})(\\d+)(?:-(IL|IR|OL|OR))?$`, "i");
+}
 const NUMBER_FIELD = /^-?\d+$/;
 
 /**
@@ -359,6 +401,8 @@ function mapScheduleRow(fields: unknown[]): IDoorImportRow | null {
   let direction: DoorDirectionCode = null;
   let num: number = undefined;
   const numbers: number[] = [];
+  const typeField = typeFieldRegex();
+  const labelField = labelFieldRegex();
 
   for (const raw of fields) {
     if (typeof raw === "number") {
@@ -371,12 +415,12 @@ function mapScheduleRow(fields: unknown[]): IDoorImportRow | null {
       continue;
     }
     const field = raw.trim();
-    if (type === null && TYPE_FIELD.test(field)) {
+    if (type === null && typeField.test(field)) {
       type = field.toUpperCase() as DoorTypeCode;
     } else if (DIRECTION_FIELD.test(field)) {
       direction = direction ?? (field.toUpperCase() as DoorDirectionCode);
-    } else if (LABEL_FIELD.test(field)) {
-      const match = field.match(LABEL_FIELD);
+    } else if (labelField.test(field)) {
+      const match = field.match(labelField);
       type = type ?? (match[1].toUpperCase() as DoorTypeCode);
       num = num ?? parseInt(match[2], 10);
       if (match[3]) {
@@ -436,4 +480,188 @@ export function importDoorsFromXlsx(file: File): Promise<IDoorImportResult> {
     };
     reader.readAsArrayBuffer(file);
   });
+}
+
+// ---------------------------------------------------------------------------
+// Custom door registry: load new door types at runtime (no rebuild) from a
+// .json or .txt definition file. Every entry is run through the same
+// renderDoorLine() parser used for built-ins before it's accepted — this is
+// the only thing standing between an uploaded file and the RegExp built from
+// door codes elsewhere in this file (doorLabelRegex, typeFieldRegex,
+// labelFieldRegex), so validation here is a security boundary, not just a
+// correctness check.
+// ---------------------------------------------------------------------------
+
+export interface DoorRegistryParseResult {
+  registry: Record<string, DoorConfig>;
+  /** Human-readable (Chinese) reasons individual entries were rejected. */
+  errors: string[];
+}
+
+// Codes feed directly into `new RegExp(...)` alternations elsewhere in this
+// file. Restricting to 1-4 uppercase letters isn't just a style choice — it
+// guarantees no regex metacharacter can reach that construction.
+const VALID_DOOR_CODE = /^[A-Z]{1,4}$/;
+
+// Widths a formula is checked against. 14 is the real minimum (see
+// DOOR_TEMPLATE_FORMAT.md); 20+ catches formulas that only happen to work
+// at small widths (e.g. an off-by-one that's masked by rounding).
+const VALIDATION_WIDTHS = [14, 15, 20, 30];
+
+/**
+ * Validates one door type definition: code format, required fields, and —
+ * by actually running the formula through renderDoorLine() — the width
+ * invariant every registry entry must satisfy. Returns null if valid, or a
+ * Chinese error message describing what's wrong.
+ */
+export function validateDoorConfig(code: string, config: DoorConfig): string | null {
+  if (!VALID_DOOR_CODE.test(code)) {
+    return `代號「${code}」必須是 1~4 個大寫英文字母(A-Z)`;
+  }
+  if (!config.name?.trim()) {
+    return `代號「${code}」缺少中文名稱(name)`;
+  }
+  if (!config.englishName?.trim()) {
+    return `代號「${code}」缺少英文名稱(englishName)`;
+  }
+  if (!config.row1_formula?.trim()) {
+    return `代號「${code}」缺少 row1_formula`;
+  }
+  for (const width of VALIDATION_WIDTHS) {
+    let rendered: string;
+    try {
+      rendered = renderDoorLine(config.row1_formula, width);
+    } catch (e) {
+      return `代號「${code}」的公式在寬度 ${width} 時解析失敗:${(e as Error).message}`;
+    }
+    if (rendered.length !== width) {
+      return `代號「${code}」的公式在寬度 ${width} 時輸出了 ${rendered.length} 個字元,必須恰好是 ${width}(見 DOOR_TEMPLATE_FORMAT.md 的寬度不變量)`;
+    }
+  }
+  return null;
+}
+
+function toDoorConfig(value: unknown): DoorConfig {
+  const raw = (value ?? {}) as Partial<Record<keyof DoorConfig, unknown>>;
+  return {
+    name: typeof raw.name === "string" ? raw.name : "",
+    englishName: typeof raw.englishName === "string" ? raw.englishName : "",
+    row1_formula: typeof raw.row1_formula === "string" ? raw.row1_formula : "",
+  };
+}
+
+/**
+ * Parses `{ "CODE": { name, englishName, row1_formula }, ... }`. Each entry
+ * is validated independently — one bad entry is reported as an error and
+ * skipped, it doesn't reject the rest of the file.
+ */
+export function parseDoorRegistryJson(text: string): DoorRegistryParseResult {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (e) {
+    return { registry: {}, errors: [`JSON 格式錯誤:${(e as Error).message}`] };
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return {
+      registry: {},
+      errors: ['JSON 最外層必須是一個物件,例如 { "DD": { "name": "...", ... } }'],
+    };
+  }
+
+  const registry: Record<string, DoorConfig> = {};
+  const errors: string[] = [];
+  for (const [rawCode, rawConfig] of Object.entries(parsed as Record<string, unknown>)) {
+    const code = rawCode.trim().toUpperCase();
+    const config = toDoorConfig(rawConfig);
+    const error = validateDoorConfig(code, config);
+    if (error) {
+      errors.push(error);
+    } else {
+      registry[code] = config;
+    }
+  }
+  return { registry, errors };
+}
+
+// "=== DOOR: CODE ===" followed by "key: value" lines, blocks separated by
+// blank lines or the next header. Deliberately simple (no nesting, no
+// escaping) — this is meant to be hand-editable in a plain text file.
+const BLOCK_HEADER = /^===\s*DOOR:\s*([A-Za-z]{1,4})\s*===$/;
+const FIELD_LINE = /^([A-Za-z0-9_]+)\s*:\s*(.*)$/;
+const DOOR_CONFIG_FIELDS = new Set(["name", "englishName", "row1_formula"]);
+
+/**
+ * Parses the plain-text "quick define" format:
+ *
+ *   === DOOR: DD ===
+ *   name: 雙開彈簧門
+ *   englishName: Double Swing Door
+ *   row1_formula: '▼' + '─' * (W-4) + '▼'
+ *
+ * One block per door type; blocks are independent, so one malformed block
+ * doesn't prevent the others from loading.
+ */
+export function parseDoorRegistryText(text: string): DoorRegistryParseResult {
+  const registry: Record<string, DoorConfig> = {};
+  const errors: string[] = [];
+  let currentCode: string | null = null;
+  let currentFields: Partial<Record<keyof DoorConfig, string>> = {};
+
+  function flush() {
+    if (currentCode === null) {
+      return;
+    }
+    const config: DoorConfig = {
+      name: currentFields.name ?? "",
+      englishName: currentFields.englishName ?? "",
+      row1_formula: currentFields.row1_formula ?? "",
+    };
+    const error = validateDoorConfig(currentCode, config);
+    if (error) {
+      errors.push(error);
+    } else {
+      registry[currentCode] = config;
+    }
+    currentCode = null;
+    currentFields = {};
+  }
+
+  for (const rawLine of text.replace(/\r\n?/g, "\n").split("\n")) {
+    const line = rawLine.trim();
+    if (line === "") {
+      continue;
+    }
+    const header = line.match(BLOCK_HEADER);
+    if (header) {
+      flush();
+      currentCode = header[1].toUpperCase();
+      continue;
+    }
+    if (currentCode === null) {
+      continue; // Stray text before the first "=== DOOR: ... ===" is ignored.
+    }
+    const field = line.match(FIELD_LINE);
+    if (!field) {
+      errors.push(`代號「${currentCode}」有一行看不懂:「${line}」`);
+      continue;
+    }
+    const [, rawKey, value] = field;
+    if (DOOR_CONFIG_FIELDS.has(rawKey)) {
+      currentFields[rawKey as keyof DoorConfig] = value.trim();
+    } else {
+      errors.push(
+        `代號「${currentCode}」有未知欄位「${rawKey}」(只支援 name / englishName / row1_formula)`
+      );
+    }
+  }
+  flush();
+  return { registry, errors };
+}
+
+/** Auto-detects JSON vs. the plain-text block format and parses accordingly. */
+export function parseDoorRegistryFile(text: string): DoorRegistryParseResult {
+  return text.trim().startsWith("{")
+    ? parseDoorRegistryJson(text)
+    : parseDoorRegistryText(text);
 }

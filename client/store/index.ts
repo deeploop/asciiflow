@@ -1,7 +1,11 @@
 import {
-  DOOR_TYPE_CODES,
+  clearCustomDoorRegistry as clearCustomDoorRegistryModule,
+  DoorConfig,
   DoorDirectionCode,
   DoorTypeCode,
+  getActiveDoorTypeCodes,
+  getCustomDoorRegistry,
+  setCustomDoorRegistry as setCustomDoorRegistryModule,
 } from "#asciiflow/client/doors";
 import { DrawBox } from "#asciiflow/client/draw/box";
 import { DrawDoor } from "#asciiflow/client/draw/door";
@@ -112,7 +116,8 @@ function readPersistent<T>(
 }
 
 function validDoorType(type: DoorTypeCode): DoorTypeCode {
-  return DOOR_TYPE_CODES.includes(type) ? type : DOOR_TYPE_CODES[0];
+  const codes = getActiveDoorTypeCodes();
+  return codes.includes(type) ? type : codes[0];
 }
 
 function writePersistent<T>(
@@ -122,6 +127,14 @@ function writePersistent<T>(
 ): void {
   localStorage.setItem(key, stringifier.serialize(value));
 }
+
+// Hydrate any door types loaded from a definition file in a previous
+// session, before initialState() below computes the default doorType — so
+// a previously-loaded custom type is still selectable (and can still be the
+// default) after a reload, without waiting for the toolbar to mount.
+setCustomDoorRegistryModule(
+  readPersistent<Record<string, DoorConfig>>("customDoorRegistry", {})
+);
 
 // ---------------------------------------------------------------------------
 // Zustand store
@@ -136,6 +149,12 @@ export interface AppState {
   freeformCharacter: string;
   doorType: DoorTypeCode;
   doorDirection: DoorDirectionCode;
+  // Bumped whenever the custom door registry changes, so React re-renders
+  // the door menu — the registry itself lives in module state (doors.ts),
+  // not here, since the pure functions in doors.ts read it directly and
+  // shouldn't depend on the Zustand store. This counter exists purely to
+  // give components something to subscribe to.
+  doorRegistryVersion: number;
   altPressed: boolean;
   currentCursor: string;
   modifierKeys: IModifierKeys;
@@ -163,8 +182,11 @@ function initialState(): AppState {
     // Fall back to the registry's first type if nothing is stored, or if a
     // stored value refers to a type that's since been removed from the
     // registry (stale localStorage) — never trust a persisted code blindly.
-    doorType: validDoorType(readPersistent<DoorTypeCode>("doorType", DOOR_TYPE_CODES[0])),
+    doorType: validDoorType(
+      readPersistent<DoorTypeCode>("doorType", getActiveDoorTypeCodes()[0])
+    ),
     doorDirection: readPersistent<DoorDirectionCode>("doorDirection", "IL"),
+    doorRegistryVersion: 0,
     altPressed: false,
     currentCursor: "default",
     modifierKeys: {},
@@ -288,6 +310,36 @@ export const store = {
   },
   setDoorDirection(value: DoorDirectionCode) {
     setPersistent("doorDirection", value);
+  },
+
+  // Custom door registry (runtime-loaded, persisted). The registry data
+  // itself lives in doors.ts module state; this just keeps it in sync with
+  // localStorage and bumps doorRegistryVersion so subscribers re-render.
+  // Callers must have already validated every entry (see
+  // validateDoorConfig/parseDoorRegistryFile in doors.ts) — this does not
+  // re-validate.
+  get customDoorRegistry() {
+    return getCustomDoorRegistry();
+  },
+  get doorRegistryVersion() {
+    return useAppStore.getState().doorRegistryVersion;
+  },
+  loadCustomDoorTypes(registry: Record<string, DoorConfig>) {
+    const merged = { ...getCustomDoorRegistry(), ...registry };
+    setCustomDoorRegistryModule(merged);
+    writePersistent("customDoorRegistry", merged);
+    useAppStore.setState((s) => ({
+      doorRegistryVersion: s.doorRegistryVersion + 1,
+      doorType: validDoorType(s.doorType),
+    }));
+  },
+  resetCustomDoorTypes() {
+    clearCustomDoorRegistryModule();
+    writePersistent("customDoorRegistry", {});
+    useAppStore.setState((s) => ({
+      doorRegistryVersion: s.doorRegistryVersion + 1,
+      doorType: validDoorType(s.doorType),
+    }));
   },
 
   // Selected tool mode

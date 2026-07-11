@@ -2,12 +2,13 @@ import { ASCII, UNICODE } from "#asciiflow/client/constants";
 import {
   DOOR_DIRECTIONS,
   DOOR_LABEL_OFFSET,
-  DOOR_TYPES,
   DoorTypeCode,
   doorTemplate,
   exportDoorsToXlsx,
+  getDoorTypes,
   importDoorsFromXlsx,
   nextDoorNumber,
+  parseDoorRegistryFile,
   scanDoors,
 } from "#asciiflow/client/doors";
 import { ExportPanel } from "#asciiflow/client/export";
@@ -409,8 +410,40 @@ function DrawPanel() {
 function DoorPanel() {
   const doorType = useAppStore((s) => s.doorType);
   const doorDirection = useAppStore((s) => s.doorDirection);
+  // Re-render whenever a custom door definition file is loaded/cleared —
+  // getDoorTypes() below reads live module state, not React state, so this
+  // counter is what actually makes the menu update.
+  useAppStore((s) => s.doorRegistryVersion);
+  const doorTypes = getDoorTypes();
+  const hasCustomDoorTypes = Object.keys(store.customDoorRegistry).length > 0;
   const [toastMessage, setToastMessage] = useState<string>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const registryFileInputRef = useRef<HTMLInputElement>(null);
+
+  async function handleLoadRegistry(file: File) {
+    const text = await file.text();
+    const { registry, errors } = parseDoorRegistryFile(text);
+    const loadedCodes = Object.keys(registry);
+    if (loadedCodes.length > 0) {
+      store.loadCustomDoorTypes(registry);
+    }
+    if (loadedCodes.length === 0) {
+      setToastMessage(
+        errors.length > 0
+          ? `no door types loaded — ${errors[0]}`
+          : "no door types found in file"
+      );
+    } else {
+      setToastMessage(
+        `loaded ${loadedCodes.length} door type(s): ${loadedCodes.join(", ")}` +
+          (errors.length > 0 ? ` (${errors.length} rejected, see console)` : "")
+      );
+      if (errors.length > 0) {
+        // tslint:disable-next-line: no-console
+        console.warn("door registry entries rejected:", errors);
+      }
+    }
+  }
 
   function handleExport() {
     const doors = scanDoors(store.currentCanvas.committed);
@@ -464,7 +497,7 @@ function DoorPanel() {
     <div className={styles.drawPanel}>
       <div className={styles.doorRow}>
         <span className={styles.viewLabel}>type:</span>
-        {DOOR_TYPES.map((type) => (
+        {doorTypes.map((type) => (
           <button
             key={type.code}
             className={[
@@ -477,6 +510,39 @@ function DoorPanel() {
             {type.code} {type.nameZh}
           </button>
         ))}
+        <span className={styles.sep}>{"│"}</span>
+        <ActionBtn
+          color="var(--color-warning)"
+          title="Load new door types from a .json or .txt definition file (載入門型定義檔)"
+          onClick={() => registryFileInputRef.current?.click()}
+        >
+          load door types
+        </ActionBtn>
+        {hasCustomDoorTypes && (
+          <ActionBtn
+            color="var(--color-danger)"
+            title="Remove all custom-loaded door types, keep only the built-ins (清除自訂門型)"
+            onClick={() => {
+              store.resetCustomDoorTypes();
+              setToastMessage("custom door types cleared");
+            }}
+          >
+            reset custom types
+          </ActionBtn>
+        )}
+        <input
+          ref={registryFileInputRef}
+          type="file"
+          accept=".json,.txt"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) {
+              handleLoadRegistry(file);
+            }
+            e.target.value = "";
+          }}
+        />
       </div>
       <div className={styles.doorRow}>
         <span className={styles.viewLabel}>swing:</span>
@@ -524,7 +590,7 @@ function DoorPanel() {
       </div>
       <div className={styles.drawHint}>
         click the canvas to place a <strong>{doorType}-{doorDirection}</strong> door
-        {" │ "}keys <Kbd>1</Kbd>–<Kbd>6</Kbd> change type, arrow keys change swing
+        {" │ "}keys <Kbd>1</Kbd>–<Kbd>9</Kbd> change type (by position), arrow keys change swing
       </div>
       <Toast
         open={toastMessage !== null}
@@ -565,7 +631,7 @@ function HelpContent() {
         <span style={{ color: "var(--color-warning)" }}>text</span>
         <span>click and type. <Kbd>enter</Kbd> commit, <Kbd>shift+enter</Kbd> newline</span>
         <span style={{ color: "var(--color-danger)" }}>door</span>
-        <span>click to stamp a door symbol (SD/BS/LM/SL/FD/GD). export/import the door schedule as excel (.xlsx)</span>
+        <span>click to stamp a door symbol. export/import the door schedule as excel (.xlsx), or load more door types from a .json/.txt definition file</span>
       </div>
       <div className={styles.helpDivider} />
       <div className={styles.helpSection}>navigation</div>
