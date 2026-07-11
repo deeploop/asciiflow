@@ -1,4 +1,10 @@
 import { Box } from "#asciiflow/client/common";
+import {
+  DOOR_REGISTRY,
+  DOOR_TYPE_CODES,
+  DoorConfig,
+  DoorTypeCode,
+} from "#asciiflow/client/door_registry";
 import { ILayerView } from "#asciiflow/client/layer";
 import { layerToText } from "#asciiflow/client/text_utils";
 import { Vector } from "#asciiflow/client/vector";
@@ -10,68 +16,14 @@ import * as XLSX from "xlsx";
  *
  * The canvas itself is the source of truth: doors are identified by their
  * label (e.g. "SD01-IL") wherever it appears, so there is no separate object
- * model to keep in sync.
+ * model to keep in sync. Door types themselves live in door_registry.ts —
+ * this file re-exports them so existing imports keep working.
  */
 
-export type DoorTypeCode = "SD" | "BS" | "LM" | "SL" | "FD" | "GD";
+export { DOOR_REGISTRY, DOOR_TYPE_CODES };
+export type { DoorConfig, DoorTypeCode };
+
 export type DoorDirectionCode = "IL" | "IR" | "OL" | "OR";
-
-// ---------------------------------------------------------------------------
-// Door registry (configuration as code)
-// ---------------------------------------------------------------------------
-
-export interface DoorConfig {
-  /** Chinese name, e.g. 懸吊門. */
-  name: string;
-  englishName: string;
-  /**
-   * Decoration row rendered above the label box, as a formula evaluated by
-   * `renderDoorLine`. `W` is the symbol width; `'x' * (expr)` tiles the quoted
-   * pattern to that length, and `+` concatenates segments.
-   */
-  row1_formula: string;
-}
-
-export const DOOR_REGISTRY: Record<DoorTypeCode, DoorConfig> = {
-  SD: {
-    name: "懸吊門",
-    englishName: "Suspension Door",
-    // Top rail with hangers.
-    row1_formula: "'●' + '─' * (W-2) + '●'",
-  },
-  BS: {
-    name: "緩衝懸吊門",
-    englishName: "Buffer Suspension Door",
-    // Rail with buffers at both ends.
-    row1_formula: "'●├' + '─' * (W-4) + '┤●'",
-  },
-  LM: {
-    name: "拉門",
-    englishName: "Sliding Door",
-    // Single-leaf sliding track.
-    row1_formula: "'◄' + '═' * (W-1)",
-  },
-  SL: {
-    name: "推拉門",
-    englishName: "Sliding Door",
-    // Double sliding track.
-    row1_formula: "'◄' + '═' * (W-2) + '►'",
-  },
-  FD: {
-    name: "折門",
-    englishName: "Folding Door",
-    // Folding leaves.
-    row1_formula: "'/\\' * W",
-  },
-  GD: {
-    name: "幽靈門",
-    englishName: "Ghost Door",
-    // Ghost (concealed) door.
-    row1_formula: "'░' * W",
-  },
-};
-
-export const DOOR_TYPE_CODES = Object.keys(DOOR_REGISTRY) as DoorTypeCode[];
 
 // Legacy list shape, still used by the toolbar and keyboard shortcuts.
 export interface IDoorType {
@@ -270,7 +222,13 @@ export interface IDoorInstance {
   position: Vector;
 }
 
-const DOOR_LABEL_REGEX = /(SD|BS|LM|SL|FD|GD)(\d+)-(IL|IR|OL|OR)/g;
+// Built from DOOR_TYPE_CODES rather than hardcoded, so a new door_registry.ts
+// entry is picked up here without touching this file.
+const DOOR_TYPE_ALTERNATION = DOOR_TYPE_CODES.join("|");
+const DOOR_LABEL_REGEX = new RegExp(
+  `(${DOOR_TYPE_ALTERNATION})(\\d+)-(IL|IR|OL|OR)`,
+  "g"
+);
 
 /** Finds all door labels on a layer, with their absolute cell positions. */
 export function scanDoors(layer: ILayerView): IDoorInstance[] {
@@ -382,9 +340,12 @@ export interface IDoorImportResult {
   skipped: number;
 }
 
-const TYPE_FIELD = /^(SD|BS|LM|SL|FD|GD)$/i;
+const TYPE_FIELD = new RegExp(`^(${DOOR_TYPE_ALTERNATION})$`, "i");
 const DIRECTION_FIELD = /^(IL|IR|OL|OR)$/i;
-const LABEL_FIELD = /^(SD|BS|LM|SL|FD|GD)(\d+)(?:-(IL|IR|OL|OR))?$/i;
+const LABEL_FIELD = new RegExp(
+  `^(${DOOR_TYPE_ALTERNATION})(\\d+)(?:-(IL|IR|OL|OR))?$`,
+  "i"
+);
 const NUMBER_FIELD = /^-?\d+$/;
 
 /**

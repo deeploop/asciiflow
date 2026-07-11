@@ -1,4 +1,5 @@
 import {
+  DOOR_TYPE_CODES,
   DoorDirectionCode,
   DoorTypeCode,
 } from "#asciiflow/client/doors";
@@ -110,6 +111,10 @@ function readPersistent<T>(
   }
 }
 
+function validDoorType(type: DoorTypeCode): DoorTypeCode {
+  return DOOR_TYPE_CODES.includes(type) ? type : DOOR_TYPE_CODES[0];
+}
+
 function writePersistent<T>(
   key: string,
   value: T,
@@ -155,7 +160,10 @@ function initialState(): AppState {
     route: DrawingId.local(null),
     selectedToolMode: ToolMode.BOX,
     freeformCharacter: "x",
-    doorType: readPersistent<DoorTypeCode>("doorType", "SD"),
+    // Fall back to the registry's first type if nothing is stored, or if a
+    // stored value refers to a type that's since been removed from the
+    // registry (stale localStorage) — never trust a persisted code blindly.
+    doorType: validDoorType(readPersistent<DoorTypeCode>("doorType", DOOR_TYPE_CODES[0])),
     doorDirection: readPersistent<DoorDirectionCode>("doorDirection", "IL"),
     altPressed: false,
     currentCursor: "default",
