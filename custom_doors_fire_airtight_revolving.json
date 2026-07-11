@@ -1,0 +1,17 @@
+{
+  "FR": {
+    "name": "防火門",
+    "englishName": "Fire Door",
+    "row1_formula": "'▣' + '═' * (W-2) + '▣'"
+  },
+  "QM": {
+    "name": "氣密門",
+    "englishName": "Airtight Door",
+    "row1_formula": "'◆' + '▒' * (W-2) + '◆'"
+  },
+  "RT": {
+    "name": "旋轉門",
+    "englishName": "Revolving Door",
+    "row1_formula": "'◇' + '╬' * (W-2) + '◇'"
+  }
+}
