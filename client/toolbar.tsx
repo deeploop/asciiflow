@@ -4,10 +4,10 @@ import {
   DOOR_LABEL_OFFSET,
   DOOR_TYPES,
   DoorTypeCode,
-  doorsToCsv,
   doorTemplate,
+  exportDoorsToXlsx,
+  importDoorsFromXlsx,
   nextDoorNumber,
-  parseDoorsCsv,
   scanDoors,
 } from "#asciiflow/client/doors";
 import { ExportPanel } from "#asciiflow/client/export";
@@ -406,16 +406,6 @@ function DrawPanel() {
 // Door panel — type / direction pickers + Excel (CSV) import/export
 // ---------------------------------------------------------------------------
 
-function downloadFile(filename: string, content: string) {
-  const blob = new Blob([content], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.click();
-  URL.revokeObjectURL(url);
-}
-
 function DoorPanel() {
   const doorType = useAppStore((s) => s.doorType);
   const doorDirection = useAppStore((s) => s.doorDirection);
@@ -428,13 +418,18 @@ function DoorPanel() {
       setToastMessage("no doors on the canvas to export");
       return;
     }
-    const name = store.route.localId || "drawing";
-    downloadFile(`${name}-doors.csv`, doorsToCsv(doors));
-    setToastMessage(`exported ${doors.length} door(s) to csv`);
+    exportDoorsToXlsx(doors);
+    setToastMessage(`exported ${doors.length} door(s) to excel`);
   }
 
   async function handleImport(file: File) {
-    const { doors, skipped } = parseDoorsCsv(await file.text());
+    let doors, skipped;
+    try {
+      ({ doors, skipped } = await importDoorsFromXlsx(file));
+    } catch (e) {
+      setToastMessage("could not read file as an excel workbook");
+      return;
+    }
     if (doors.length === 0) {
       setToastMessage("no valid door rows found in file");
       return;
@@ -501,14 +496,14 @@ function DoorPanel() {
         <span className={styles.sep}>{"│"}</span>
         <ActionBtn
           color="var(--color-success)"
-          title="Export door schedule as Excel-compatible CSV (匯出門表)"
+          title="Export door schedule as Excel .xlsx (匯出門表)"
           onClick={handleExport}
         >
           export excel
         </ActionBtn>
         <ActionBtn
           color="var(--color-accent)"
-          title="Import door schedule from CSV (匯入門表)"
+          title="Import door schedule from Excel .xlsx or CSV (匯入門表)"
           onClick={() => fileInputRef.current?.click()}
         >
           import excel
@@ -516,7 +511,7 @@ function DoorPanel() {
         <input
           ref={fileInputRef}
           type="file"
-          accept=".csv,.txt,text/csv"
+          accept=".xlsx,.xls,.csv"
           style={{ display: "none" }}
           onChange={(e) => {
             const file = e.target.files?.[0];
@@ -570,7 +565,7 @@ function HelpContent() {
         <span style={{ color: "var(--color-warning)" }}>text</span>
         <span>click and type. <Kbd>enter</Kbd> commit, <Kbd>shift+enter</Kbd> newline</span>
         <span style={{ color: "var(--color-danger)" }}>door</span>
-        <span>click to stamp a door symbol (SD/BS/LM/SL/FD/GD). export/import the door schedule as excel csv</span>
+        <span>click to stamp a door symbol (SD/BS/LM/SL/FD/GD). export/import the door schedule as excel (.xlsx)</span>
       </div>
       <div className={styles.helpDivider} />
       <div className={styles.helpSection}>navigation</div>

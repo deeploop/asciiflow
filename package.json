@@ -11,8 +11,6 @@
   "type": "module",
   "dependencies": {
     "@playwright/test": "^1.49.0",
-    "playwright": "^1.49.0",
-    "playwright-core": "^1.49.0",
     "@types/chai": "^4.3.12",
     "@types/diff": "^5.0.9",
     "@types/json-stable-stringify": "^1.0.36",
@@ -32,6 +30,8 @@
     "json-stable-stringify": "^1.1.1",
     "mocha": "^11.0.0",
     "pako": "^1.0.11",
+    "playwright": "^1.49.0",
+    "playwright-core": "^1.49.0",
     "react": "^16.14.0",
     "react-dom": "^16.14.0",
     "react-router": "^5.3.4",
@@ -40,6 +40,7 @@
     "source-map-support": "^0.5.21",
     "typescript": "^5.7.0",
     "uuid": "^8.3.2",
+    "xlsx": "^0.18.5",
     "zustand": "^4.5.5"
   },
   "pnpm": {

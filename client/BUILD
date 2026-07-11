@@ -50,6 +50,7 @@ ts_library(
         "//:node_modules/react-router",
         "//:node_modules/react-router-dom",
         "//:node_modules/uuid",
+        "//:node_modules/xlsx",
         "//:node_modules/zustand",
         "//common",
     ],

@@ -1,24 +1,70 @@
 import {
   DOOR_DIRECTIONS,
   DOOR_LABEL_OFFSET,
+  DOOR_REGISTRY,
   DOOR_TYPES,
   doorLabel,
   doorTemplate,
-  doorsToCsv,
+  doorsToXlsxData,
   nextDoorNumber,
-  parseDoorsCsv,
+  parseDoorsWorkbook,
+  renderDoorLine,
   scanDoors,
 } from "#asciiflow/client/doors";
 import { Layer } from "#asciiflow/client/layer";
 import { textToLayer } from "#asciiflow/client/text_utils";
 import { Vector } from "#asciiflow/client/vector";
 import { expect } from "chai";
+import * as XLSX from "xlsx";
 
 describe("doors", () => {
   it("generates labels with zero-padded numbers", () => {
     expect(doorLabel("SD", 1, "IL")).equals("SD01-IL");
     expect(doorLabel("GD", 12, "OR")).equals("GD12-OR");
     expect(doorLabel("BS", 123, "OL")).equals("BS123-OL");
+  });
+
+  describe("renderDoorLine (formula parser)", () => {
+    it("concatenates literals and tiled patterns", () => {
+      expect(renderDoorLine("'●' + '─' * (W-2) + '●'", 6)).equals("●────●");
+      expect(renderDoorLine("'●├' + '─' * (W-4) + '┤●'", 8)).equals(
+        "●├────┤●"
+      );
+      expect(renderDoorLine("'◄' + '═' * (W-1)", 5)).equals("◄════");
+    });
+
+    it("tiles multi-character patterns and truncates to length", () => {
+      expect(renderDoorLine("'/\\' * W", 5)).equals("/\\/\\/");
+      expect(renderDoorLine("'░' * W", 3)).equals("░░░");
+    });
+
+    it("evaluates arithmetic with precedence and parentheses", () => {
+      expect(renderDoorLine("'x' * (W*2-1)", 3)).equals("xxxxx");
+      expect(renderDoorLine("'x' * (W/2+1)", 8)).equals("xxxxx");
+      expect(renderDoorLine("'x' * ((W-2)*2)", 4)).equals("xxxx");
+    });
+
+    it("clamps non-positive repeat counts to empty", () => {
+      expect(renderDoorLine("'a' + 'x' * (W-9) + 'b'", 4)).equals("ab");
+    });
+
+    it("rejects unsafe or malformed formulas instead of evaluating them", () => {
+      expect(() => renderDoorLine("'x' * alert(1)", 5)).throws();
+      expect(() => renderDoorLine("'x' * (W-)", 5)).throws();
+      expect(() => renderDoorLine("'x' * ((W-2)", 5)).throws();
+      expect(() => renderDoorLine("no quotes here", 5)).throws();
+      expect(() => renderDoorLine("'x' * W; 'y'", 5)).throws();
+    });
+
+    it("every registry formula renders at exactly width W", () => {
+      for (const config of Object.values(DOOR_REGISTRY)) {
+        for (const width of [10, 13, 20]) {
+          expect(renderDoorLine(config.row1_formula, width).length).equals(
+            width
+          );
+        }
+      }
+    });
   });
 
   it("generates rectangular templates for every type and direction", () => {
@@ -64,65 +110,95 @@ describe("doors", () => {
     expect(nextDoorNumber(layer, "GD")).equals(1);
   });
 
-  it("round-trips the door schedule through csv", () => {
-    const layer = new Layer();
-    layer.setFrom(textToLayer(doorTemplate("SD", "IL", 1), new Vector(3, 4)));
-    layer.setFrom(textToLayer(doorTemplate("LM", "OR", 2), new Vector(30, 4)));
-    const exported = doorsToCsv(scanDoors(layer));
-    // Excel-friendly: BOM + CRLF + Chinese names.
-    expect(exported.startsWith("\uFEFF")).equals(true);
-    expect(exported).contains("\r\n");
-    expect(exported).contains("懸吊門");
-    expect(exported).contains("內開左開");
+  describe("xlsx export / import", () => {
+    it("round-trips the door schedule through a real .xlsx workbook", () => {
+      const layer = new Layer();
+      layer.setFrom(textToLayer(doorTemplate("SD", "IL", 1), new Vector(3, 4)));
+      layer.setFrom(
+        textToLayer(doorTemplate("LM", "OR", 2), new Vector(30, 4))
+      );
+      const data = doorsToXlsxData(scanDoors(layer));
 
-    const { doors, skipped } = parseDoorsCsv(exported);
-    // Only the header row is skipped.
-    expect(skipped).equals(1);
-    expect(doors).to.have.length(2);
-    expect(doors[0].type).equals("SD");
-    expect(doors[0].direction).equals("IL");
-    expect(doors[0].num).equals(1);
-    expect(doors[0].position.x).equals(3 + DOOR_LABEL_OFFSET.x);
-    expect(doors[0].position.y).equals(4 + DOOR_LABEL_OFFSET.y);
-    expect(doors[1].type).equals("LM");
-    expect(doors[1].direction).equals("OR");
-  });
+      // The workbook carries the full schedule, Chinese names included.
+      const workbook = XLSX.read(data, { type: "array" });
+      const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(
+        workbook.Sheets[workbook.SheetNames[0]]
+      );
+      expect(rows).to.have.length(2);
+      expect(rows[0]["編號"]).equals("SD01");
+      expect(rows[0]["中文名稱"]).equals("懸吊門");
+      expect(rows[0]["開向"]).equals("內開左開");
 
-  it("parses a minimal headerless sheet", () => {
-    const { doors, skipped } = parseDoorsCsv("SD,IL,10,5\nFD,OR,30,12\n");
-    expect(skipped).equals(0);
-    expect(doors).to.have.length(2);
-    expect(doors[0].num).equals(undefined);
-    expect(doors[0].position.x).equals(10);
-    expect(doors[1].type).equals("FD");
-  });
+      const { doors, skipped } = parseDoorsWorkbook(data);
+      // Only the header row is skipped.
+      expect(skipped).equals(1);
+      expect(doors).to.have.length(2);
+      expect(doors[0].type).equals("SD");
+      expect(doors[0].direction).equals("IL");
+      expect(doors[0].num).equals(1);
+      expect(doors[0].position.x).equals(3 + DOOR_LABEL_OFFSET.x);
+      expect(doors[0].position.y).equals(4 + DOOR_LABEL_OFFSET.y);
+      expect(doors[1].type).equals("LM");
+      expect(doors[1].direction).equals("OR");
+    });
 
-  it("parses a minimal sheet with a header row and mixed order", () => {
-    const csv = "開向,代號,Y,X\nIL,SD,5,10\n";
-    // Column *order* doesn't matter for type/direction, but numbers are
-    // always read as X then Y.
-    const { doors } = parseDoorsCsv(csv);
-    expect(doors).to.have.length(1);
-    expect(doors[0].type).equals("SD");
-    expect(doors[0].position.x).equals(5);
-    expect(doors[0].position.y).equals(10);
-  });
+    it("imports a minimal headerless sheet with mixed column order", () => {
+      const sheet = XLSX.utils.aoa_to_sheet([
+        ["SD", "IL", 10, 5],
+        ["OR", "FD", 30, 12],
+      ]);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, sheet, "Sheet1");
+      const data = XLSX.write(workbook, { type: "array", bookType: "xlsx" });
 
-  it("parses semicolon-delimited csv (Excel locale variant)", () => {
-    const { doors } = parseDoorsCsv("BS01;BS;緩衝懸吊門;OL;12;7\r\n");
-    expect(doors).to.have.length(1);
-    expect(doors[0].type).equals("BS");
-    expect(doors[0].direction).equals("OL");
-    expect(doors[0].num).equals(1);
-    expect(doors[0].position.x).equals(12);
-    expect(doors[0].position.y).equals(7);
-  });
+      const { doors, skipped } = parseDoorsWorkbook(data);
+      expect(skipped).equals(0);
+      expect(doors).to.have.length(2);
+      expect(doors[0].type).equals("SD");
+      expect(doors[0].num).equals(undefined);
+      expect(doors[0].position.x).equals(10);
+      expect(doors[1].type).equals("FD");
+      expect(doors[1].direction).equals("OR");
+    });
 
-  it("derives type, number and direction from a full label field", () => {
-    const { doors } = parseDoorsCsv("GD07-IR,3,9\n");
-    expect(doors).to.have.length(1);
-    expect(doors[0].type).equals("GD");
-    expect(doors[0].num).equals(7);
-    expect(doors[0].direction).equals("IR");
+    it("derives type, number and direction from a full label cell", () => {
+      const sheet = XLSX.utils.aoa_to_sheet([["GD07-IR", 3, 9]]);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, sheet, "Sheet1");
+      const data = XLSX.write(workbook, { type: "array", bookType: "xlsx" });
+
+      const { doors } = parseDoorsWorkbook(data);
+      expect(doors).to.have.length(1);
+      expect(doors[0].type).equals("GD");
+      expect(doors[0].num).equals(7);
+      expect(doors[0].direction).equals("IR");
+    });
+
+    it("skips rows with unknown codes or missing coordinates", () => {
+      const sheet = XLSX.utils.aoa_to_sheet([
+        ["代號", "開向", "X", "Y"],
+        ["ZZ", "IL", 1, 2], // unknown type
+        ["SD", "XX", 1, 2], // unknown direction
+        ["SD", "IL", 1], // missing Y
+        ["SD", "IL", 4, 5], // valid
+      ]);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, sheet, "Sheet1");
+      const data = XLSX.write(workbook, { type: "array", bookType: "xlsx" });
+
+      const { doors, skipped } = parseDoorsWorkbook(data);
+      expect(doors).to.have.length(1);
+      expect(doors[0].position.x).equals(4);
+      expect(doors[0].position.y).equals(5);
+      expect(skipped).equals(4);
+    });
+
+    it("imports csv bytes through the same parser (SheetJS sniffs format)", () => {
+      const csv = new TextEncoder().encode("SD,IL,10,5\nFD,OR,30,12\n");
+      const { doors, skipped } = parseDoorsWorkbook(csv);
+      expect(skipped).equals(0);
+      expect(doors).to.have.length(2);
+      expect(doors[1].type).equals("FD");
+    });
   });
 });

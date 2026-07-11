@@ -87,23 +87,22 @@
 4. 鍵盤加速:door 模式下按 `1`–`6` 切換門型;方向鍵 `←/→` 切左/右開、`↑/↓` 切外/內開。
 5. 放置後的門符號是一般字元,可用 select 工具整批搬移、複製、刪除。
 
-## 5. Excel 匯入/匯出設計
+## 5. Excel 匯入/匯出設計(v2:原生 .xlsx,SheetJS)
 
-### 5.1 為什麼用 CSV(UTF-8 BOM)而不是 .xlsx
+### 5.1 實作方式
 
-- ASCIIFlow 是零後端、Bazel 建置的純前端專案;引入 SheetJS 等 xlsx 函式庫會顯著增加 bundle 體積與建置複雜度。
-- **UTF-8 BOM 的 CSV 雙擊即可在 Excel 正確開啟(含中文欄位)**,Excel 另存為 CSV 也可直接匯回,實務上即為「Excel 匯入匯出」。
-- 若未來需要原生 `.xlsx`(多工作表、樣式),可在此介面上直接替換序列化層(已預留獨立模組 `client/doors.ts`)。
+- 採用 **SheetJS(`xlsx` 0.18.5)** 於純前端讀寫原生 Excel 檔,零後端。
+- 匯出:`XLSX.utils.json_to_sheet` + `XLSX.writeFile` 直接觸發下載 `doors-schedule.xlsx`。
+- 匯入:`<input type="file">` → `FileReader` 讀成 `ArrayBuffer` → `XLSX.read(data, { type: "array" })` → 第一張工作表 `sheet_to_json` 還原為門列表。SheetJS 會自動判別格式,**.xlsx / .xls / .csv 都走同一條匯入路徑**。
+- 代價:bundle 由約 286KB 增為約 707KB(SheetJS 約 +420KB min)。
 
 ### 5.2 匯出格式(門表)
 
-檔名 `{圖名}-doors.csv`,欄位:
+檔名 `doors-schedule.xlsx`,工作表 `Doors`,欄位:
 
-```csv
-編號,代號,中文名稱,英文名稱,開向代號,開向,X,Y
-SD01,SD,懸吊門,Suspension Door,IL,內開左開,12,5
-BS01,BS,緩衝懸吊門,Buffer Suspension Door,OR,外開右開,40,5
-```
+| 編號 | 代號 | 中文名稱 | 英文名稱 | 開向代號 | 開向 | X | Y |
+|------|------|----------|----------|----------|------|---|---|
+| SD01 | SD | 懸吊門 | Suspension Door | IL | 內開左開 | 12 | 5 |
 
 - `X, Y` 為標籤左上角在畫布上的格點座標(匯入時可完整還原位置)。
 - 匯出時即時掃描畫布標籤,手動修改過的編號也會如實反映。
@@ -113,15 +112,22 @@ BS01,BS,緩衝懸吊門,Buffer Suspension Door,OR,外開右開,40,5
 支援兩種:
 
 1. **完整格式**:直接匯回上面匯出的檔案(round-trip)。
-2. **最簡格式**:只要 `代號,開向代號,X,Y` 四欄(有無標題列皆可,欄名支援中英文別名 `code/type/代號`、`dir/direction/開向`…),例如:
-
-```csv
-代號,開向代號,X,Y
-SD,IL,10,5
-FD,OR,30,12
-```
+2. **最簡格式**:每列只要有 `代號`(或完整編號如 `SD01-IL`)、`開向代號`、`X`、`Y` 即可 — **欄位順序不限、有無標題列皆可**,無效列(未知代號、缺座標)會被略過並統計。
 
 匯入行為:每列於 `(X,Y)` 蓋上一個門範本;有給編號就用給定編號,沒給則自動接續現有流水號;整批匯入為單一 undo 步驟,匯入結果(成功樘數/略過列數)以 toast 提示。
+
+### 5.4 範本註冊表(Configuration as Code)
+
+門型定義集中在 `DOOR_REGISTRY`,每種門型的特徵列以公式字串描述(`W` 為符號寬度),由安全的迷你解析器 `renderDoorLine()` 展開 — 不使用 `eval()`,以 regex 斷詞 + 遞迴下降解析四則運算:
+
+```typescript
+SD: { name: "懸吊門", englishName: "Suspension Door",
+      row1_formula: "'●' + '─' * (W-2) + '●'" },
+FD: { name: "折門",   englishName: "Folding Door",
+      row1_formula: "'/\\' * W" },  // 圖樣自動平鋪並截斷至 W
+```
+
+新增門型只需在註冊表加一筆設定,不用改任何程式邏輯。
 
 ## 6. 技術架構
 

@@ -2,10 +2,11 @@ import { Box } from "#asciiflow/client/common";
 import { ILayerView } from "#asciiflow/client/layer";
 import { layerToText } from "#asciiflow/client/text_utils";
 import { Vector } from "#asciiflow/client/vector";
+import * as XLSX from "xlsx";
 
 /**
  * Door module: quick-stamp door symbols with standard codes, and a plain-data
- * door schedule that round-trips through Excel-compatible CSV.
+ * door schedule that round-trips through native Excel (.xlsx) files.
  *
  * The canvas itself is the source of truth: doors are identified by their
  * label (e.g. "SD01-IL") wherever it appears, so there is no separate object
@@ -15,20 +16,75 @@ import { Vector } from "#asciiflow/client/vector";
 export type DoorTypeCode = "SD" | "BS" | "LM" | "SL" | "FD" | "GD";
 export type DoorDirectionCode = "IL" | "IR" | "OL" | "OR";
 
+// ---------------------------------------------------------------------------
+// Door registry (configuration as code)
+// ---------------------------------------------------------------------------
+
+export interface DoorConfig {
+  /** Chinese name, e.g. 懸吊門. */
+  name: string;
+  englishName: string;
+  /**
+   * Decoration row rendered above the label box, as a formula evaluated by
+   * `renderDoorLine`. `W` is the symbol width; `'x' * (expr)` tiles the quoted
+   * pattern to that length, and `+` concatenates segments.
+   */
+  row1_formula: string;
+}
+
+export const DOOR_REGISTRY: Record<DoorTypeCode, DoorConfig> = {
+  SD: {
+    name: "懸吊門",
+    englishName: "Suspension Door",
+    // Top rail with hangers.
+    row1_formula: "'●' + '─' * (W-2) + '●'",
+  },
+  BS: {
+    name: "緩衝懸吊門",
+    englishName: "Buffer Suspension Door",
+    // Rail with buffers at both ends.
+    row1_formula: "'●├' + '─' * (W-4) + '┤●'",
+  },
+  LM: {
+    name: "拉門",
+    englishName: "Sliding Door",
+    // Single-leaf sliding track.
+    row1_formula: "'◄' + '═' * (W-1)",
+  },
+  SL: {
+    name: "推拉門",
+    englishName: "Sliding Door",
+    // Double sliding track.
+    row1_formula: "'◄' + '═' * (W-2) + '►'",
+  },
+  FD: {
+    name: "折門",
+    englishName: "Folding Door",
+    // Folding leaves.
+    row1_formula: "'/\\' * W",
+  },
+  GD: {
+    name: "幽靈門",
+    englishName: "Ghost Door",
+    // Ghost (concealed) door.
+    row1_formula: "'░' * W",
+  },
+};
+
+export const DOOR_TYPE_CODES = Object.keys(DOOR_REGISTRY) as DoorTypeCode[];
+
+// Legacy list shape, still used by the toolbar and keyboard shortcuts.
 export interface IDoorType {
   code: DoorTypeCode;
   nameZh: string;
   nameEn: string;
 }
 
-export const DOOR_TYPES: IDoorType[] = [
-  { code: "SD", nameZh: "懸吊門", nameEn: "Suspension Door" },
-  { code: "BS", nameZh: "緩衝懸吊門", nameEn: "Buffer Suspension Door" },
-  { code: "LM", nameZh: "拉門", nameEn: "Sliding Door" },
-  { code: "SL", nameZh: "推拉門", nameEn: "Sliding Door" },
-  { code: "FD", nameZh: "折門", nameEn: "Folding Door" },
-  { code: "GD", nameZh: "幽靈門", nameEn: "Ghost Door" },
-];
+export const DOOR_TYPES: IDoorType[] = DOOR_TYPE_CODES.map((code) => ({
+  code,
+  nameZh: DOOR_REGISTRY[code].name,
+  nameEn: DOOR_REGISTRY[code].englishName,
+}));
 
 export interface IDoorDirection {
   code: DoorDirectionCode;
@@ -62,23 +118,114 @@ export function doorLabel(
   return `${type}${String(num).padStart(2, "0")}-${direction}`;
 }
 
-/** Type-specific decoration row rendered above the label box. */
-function glyphRow(type: DoorTypeCode, width: number): string {
-  switch (type) {
-    case "SD": // top rail with hangers
-      return "●" + "─".repeat(width - 2) + "●";
-    case "BS": // rail with buffers at both ends
-      return "●├" + "─".repeat(width - 4) + "┤●";
-    case "LM": // single-leaf sliding track
-      return "◄" + "═".repeat(width - 1);
-    case "SL": // double sliding track
-      return "◄" + "═".repeat(width - 2) + "►";
-    case "FD": // folding leaves
-      return "/\\".repeat(Math.ceil(width / 2)).slice(0, width);
-    case "GD": // ghost (concealed) door
-      return "░".repeat(width);
+// ---------------------------------------------------------------------------
+// Formula parser for registry rows
+// ---------------------------------------------------------------------------
+
+// One segment of a formula: a quoted pattern with an optional `* multiplier`.
+// The multiplier runs up to the next joining `+` — a `+` that introduces the
+// next quoted literal — so arithmetic like (W/2+1) stays inside the segment.
+const FORMULA_SEGMENT = /'([^']*)'(?:\s*\*\s*((?:[^+']|\+(?!\s*'))+))?/g;
+
+/**
+ * Safely evaluates an integer arithmetic expression over `W` (the symbol
+ * width): numbers, + - * /, and parentheses. No eval() — a tiny recursive
+ * descent parser over a validated token stream.
+ */
+function evalWidthExpression(expression: string, width: number): number {
+  const tokens = expression.match(/\d+|[Ww]|[+\-*/()]/g) ?? [];
+  // Reject anything the tokenizer didn't consume (e.g. letters, `..`).
+  if (tokens.join("") !== expression.replace(/\s+/g, "")) {
+    throw new Error(`invalid width expression: ${expression}`);
   }
+  let index = 0;
+  const peek = () => tokens[index];
+  const next = () => tokens[index++];
+
+  function parseFactor(): number {
+    const token = next();
+    if (token === "(") {
+      const value = parseSum();
+      if (next() !== ")") {
+        throw new Error(`unbalanced parentheses: ${expression}`);
+      }
+      return value;
+    }
+    if (token === "-") {
+      return -parseFactor();
+    }
+    if (token === "W" || token === "w") {
+      return width;
+    }
+    if (token !== undefined && /^\d+$/.test(token)) {
+      return parseInt(token, 10);
+    }
+    throw new Error(`invalid width expression: ${expression}`);
+  }
+
+  function parseProduct(): number {
+    let value = parseFactor();
+    while (peek() === "*" || peek() === "/") {
+      value = next() === "*" ? value * parseFactor() : value / parseFactor();
+    }
+    return value;
+  }
+
+  function parseSum(): number {
+    let value = parseProduct();
+    while (peek() === "+" || peek() === "-") {
+      value = next() === "+" ? value + parseProduct() : value - parseProduct();
+    }
+    return value;
+  }
+
+  const result = parseSum();
+  if (index !== tokens.length || !Number.isFinite(result)) {
+    throw new Error(`invalid width expression: ${expression}`);
+  }
+  return result;
 }
+
+/** Tiles a pattern to exactly `length` characters (e.g. "/\" → "/\/\/"). */
+function tile(pattern: string, length: number): string {
+  if (length <= 0 || pattern.length === 0) {
+    return "";
+  }
+  return pattern.repeat(Math.ceil(length / pattern.length)).slice(0, length);
+}
+
+/**
+ * Renders one registry formula for a symbol of width `W`.
+ *
+ * Grammar: segments joined by `+`, where each segment is `'pattern'` (used
+ * as-is) or `'pattern' * expr` (pattern tiled to `expr` characters, with
+ * `expr` an arithmetic expression over `W`).
+ *
+ * e.g. renderDoorLine("'●' + '─' * (W-2) + '●'", 6) → "●────●"
+ */
+export function renderDoorLine(formula: string, W: number): string {
+  let result = "";
+  let matched = "";
+  for (const match of formula.matchAll(FORMULA_SEGMENT)) {
+    matched += match[0];
+    const pattern = match[1];
+    result +=
+      match[2] === undefined
+        ? pattern
+        : tile(pattern, Math.floor(evalWidthExpression(match[2], W)));
+  }
+  // Everything outside the matched segments must be joining '+' only,
+  // otherwise the formula contains syntax we silently ignored.
+  const rest = formula.replace(FORMULA_SEGMENT, "").replace(/[\s+]/g, "");
+  if (matched === "" || rest !== "") {
+    throw new Error(`invalid door formula: ${formula}`);
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Template generation
+// ---------------------------------------------------------------------------
 
 /**
  * Offset of the label's first character relative to the template's top-left
@@ -104,7 +251,7 @@ export function doorTemplate(
   } `;
   const width = interior.length + 2;
   return [
-    glyphRow(type, width),
+    renderDoorLine(DOOR_REGISTRY[type].row1_formula, width),
     "┌" + "─".repeat(interior.length) + "┐",
     "│" + interior + "│",
     "└" + "─".repeat(interior.length) + "┘",
@@ -167,40 +314,58 @@ export function nextDoorNumber(
 }
 
 // ---------------------------------------------------------------------------
-// Excel (CSV) export / import
+// Excel (.xlsx) export / import via SheetJS
 // ---------------------------------------------------------------------------
 
-const CSV_HEADER = [
-  "編號",
-  "代號",
-  "中文名稱",
-  "英文名稱",
-  "開向代號",
-  "開向",
-  "X",
-  "Y",
-];
+/** One row of the exported door schedule, keyed by the sheet headers. */
+interface IDoorScheduleRow {
+  編號: string;
+  代號: string;
+  中文名稱: string;
+  英文名稱: string;
+  開向代號: string;
+  開向: string;
+  X: number;
+  Y: number;
+}
+
+function doorsToScheduleRows(doors: IDoorInstance[]): IDoorScheduleRow[] {
+  return doors.map((door) => ({
+    編號: `${door.type}${String(door.num).padStart(2, "0")}`,
+    代號: door.type,
+    中文名稱: DOOR_REGISTRY[door.type].name,
+    英文名稱: DOOR_REGISTRY[door.type].englishName,
+    開向代號: door.direction,
+    開向: doorDirection(door.direction).nameZh,
+    X: door.position.x,
+    Y: door.position.y,
+  }));
+}
+
+function doorsToWorkbook(doors: IDoorInstance[]): XLSX.WorkBook {
+  const sheet = XLSX.utils.json_to_sheet(doorsToScheduleRows(doors));
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, "Doors");
+  return workbook;
+}
+
+/** Serializes the door schedule to .xlsx bytes (used by export and tests). */
+export function doorsToXlsxData(doors: IDoorInstance[]): ArrayBuffer {
+  return XLSX.write(doorsToWorkbook(doors), {
+    type: "array",
+    bookType: "xlsx",
+  });
+}
 
 /**
- * Door schedule as CSV. Prefixed with a UTF-8 BOM and using CRLF line endings
- * so double-clicking the file opens correctly in Excel (Chinese included).
+ * Downloads the door schedule as a native Excel file (works fully client-side;
+ * XLSX.writeFile creates the blob and triggers the browser download).
  */
-export function doorsToCsv(doors: IDoorInstance[]): string {
-  const rows = doors.map((door) => {
-    const type = doorType(door.type);
-    const direction = doorDirection(door.direction);
-    return [
-      doorLabel(door.type, door.num, door.direction).split("-")[0],
-      door.type,
-      type.nameZh,
-      type.nameEn,
-      door.direction,
-      direction.nameZh,
-      String(door.position.x),
-      String(door.position.y),
-    ].join(",");
-  });
-  return "\uFEFF" + [CSV_HEADER.join(","), ...rows].join("\r\n") + "\r\n";
+export function exportDoorsToXlsx(
+  doors: IDoorInstance[],
+  filename = "doors-schedule.xlsx"
+): void {
+  XLSX.writeFile(doorsToWorkbook(doors), filename);
 }
 
 export interface IDoorImportRow {
@@ -223,62 +388,91 @@ const LABEL_FIELD = /^(SD|BS|LM|SL|FD|GD)(\d+)(?:-(IL|IR|OL|OR))?$/i;
 const NUMBER_FIELD = /^-?\d+$/;
 
 /**
- * Parses a door schedule CSV. Column order doesn't matter and no header is
- * required: each row just needs a type (or label like "SD01"), a direction,
- * and two numbers (X then Y). This accepts both the exported format and a
- * minimal hand-written "代號,開向,X,Y" sheet saved from Excel.
+ * Maps one sheet row (any column names/order) to a door. Each row just needs
+ * a type (or label like "SD01"), a direction, and two numbers (X then Y as
+ * they appear in the sheet). Returns null for rows that don't validate —
+ * header-ish rows, unknown codes, missing coordinates.
  */
-export function parseDoorsCsv(content: string): IDoorImportResult {
-  const text = content.replace(/^\uFEFF/, "");
-  const lines = text.split(/\r\n?|\n/).filter((line) => line.trim() !== "");
-  // Excel in some locales saves CSV with semicolons.
-  const delimiter =
-    lines.length > 0 &&
-    lines[0].split(";").length > lines[0].split(",").length
-      ? ";"
-      : ",";
+function mapScheduleRow(fields: unknown[]): IDoorImportRow | null {
+  let type: DoorTypeCode = null;
+  let direction: DoorDirectionCode = null;
+  let num: number = undefined;
+  const numbers: number[] = [];
 
+  for (const raw of fields) {
+    if (typeof raw === "number") {
+      if (Number.isFinite(raw)) {
+        numbers.push(Math.round(raw));
+      }
+      continue;
+    }
+    if (typeof raw !== "string") {
+      continue;
+    }
+    const field = raw.trim();
+    if (type === null && TYPE_FIELD.test(field)) {
+      type = field.toUpperCase() as DoorTypeCode;
+    } else if (DIRECTION_FIELD.test(field)) {
+      direction = direction ?? (field.toUpperCase() as DoorDirectionCode);
+    } else if (LABEL_FIELD.test(field)) {
+      const match = field.match(LABEL_FIELD);
+      type = type ?? (match[1].toUpperCase() as DoorTypeCode);
+      num = num ?? parseInt(match[2], 10);
+      if (match[3]) {
+        direction = direction ?? (match[3].toUpperCase() as DoorDirectionCode);
+      }
+    } else if (NUMBER_FIELD.test(field)) {
+      numbers.push(parseInt(field, 10));
+    }
+  }
+
+  if (type === null || direction === null || numbers.length < 2) {
+    return null;
+  }
+  return { type, direction, num, position: new Vector(numbers[0], numbers[1]) };
+}
+
+/**
+ * Parses a door schedule workbook (first sheet). Exposed separately from the
+ * File wrapper so it's testable without a DOM.
+ */
+export function parseDoorsWorkbook(data: ArrayBuffer | Uint8Array): IDoorImportResult {
+  const workbook = XLSX.read(data, { type: "array" });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  // header: 1 keeps rows as positional arrays, so column names and order
+  // don't matter and headerless sheets work too.
+  const rows = sheet
+    ? XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, blankrows: false })
+    : [];
   const doors: IDoorImportRow[] = [];
   let skipped = 0;
-  for (const line of lines) {
-    const fields = line
-      .split(delimiter)
-      .map((field) => field.trim().replace(/^"(.*)"$/, "$1"));
-
-    let type: DoorTypeCode = null;
-    let direction: DoorDirectionCode = null;
-    let num: number = undefined;
-    const numbers: number[] = [];
-
-    for (const field of fields) {
-      if (type === null && TYPE_FIELD.test(field)) {
-        type = field.toUpperCase() as DoorTypeCode;
-      } else if (DIRECTION_FIELD.test(field)) {
-        direction = direction ?? (field.toUpperCase() as DoorDirectionCode);
-      } else if (LABEL_FIELD.test(field)) {
-        const match = field.match(LABEL_FIELD);
-        type = type ?? (match[1].toUpperCase() as DoorTypeCode);
-        num = num ?? parseInt(match[2], 10);
-        if (match[3]) {
-          direction =
-            direction ?? (match[3].toUpperCase() as DoorDirectionCode);
-        }
-      } else if (NUMBER_FIELD.test(field)) {
-        numbers.push(parseInt(field, 10));
-      }
-    }
-
-    if (type !== null && direction !== null && numbers.length >= 2) {
-      doors.push({
-        type,
-        direction,
-        num,
-        position: new Vector(numbers[0], numbers[1]),
-      });
+  for (const row of rows) {
+    const door = mapScheduleRow(row);
+    if (door) {
+      doors.push(door);
     } else {
-      // Header rows and malformed lines land here.
       skipped++;
     }
   }
   return { doors, skipped };
+}
+
+/**
+ * Reads a user-selected .xlsx/.xls/.csv file and parses it into door rows.
+ * SheetJS sniffs the format from the bytes, so Excel files and CSV exports
+ * both work through the same path.
+ */
+export function importDoorsFromXlsx(file: File): Promise<IDoorImportResult> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error);
+    reader.onload = () => {
+      try {
+        resolve(parseDoorsWorkbook(reader.result as ArrayBuffer));
+      } catch (e) {
+        reject(e);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  });
 }
