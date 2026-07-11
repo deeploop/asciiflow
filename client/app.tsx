@@ -7,7 +7,7 @@ import {
 } from "#asciiflow/client/controller";
 import { Toolbar } from "#asciiflow/client/toolbar";
 import { DrawingId, store, ToolMode, useAppStore } from "#asciiflow/client/store";
-import { renderedVersion, screenToCell, View } from "#asciiflow/client/view";
+import { cellToScreen, renderedVersion, screenToCell, View } from "#asciiflow/client/view";
 import { initFont } from "#asciiflow/client/font";
 
 import { HashRouter, Route, useParams } from "react-router-dom";
@@ -69,6 +69,24 @@ async function render() {
   getZoom: () => store.currentCanvas.zoom,
   getOffset: () => ({ x: store.currentCanvas.offset.x, y: store.currentCanvas.offset.y }),
   getCellSize: () => ({ w: CHAR_PIXELS_H, h: CHAR_PIXELS_V }),
+  // Precise cell<->screen conversion for e2e tests that need to click a
+  // specific grid cell — avoids each test hand-replicating view.tsx's
+  // zoom/offset math (a past source of test-coordinate bugs).
+  cellToScreen: (x: number, y: number) => {
+    const p = cellToScreen(new Vector(x, y));
+    return { x: p.x, y: p.y };
+  },
+  screenToCell: (x: number, y: number) => {
+    const p = screenToCell(new Vector(x, y));
+    return { x: p.x, y: p.y };
+  },
+  getSelectionBox: () => {
+    const box = store.currentCanvas.selection;
+    return box
+      ? { left: box.left(), top: box.top(), right: box.right(), bottom: box.bottom() }
+      : null;
+  },
+  getCellValue: (x: number, y: number) => store.currentCanvas.committed.get(new Vector(x, y)),
 };
 
 // tslint:disable-next-line: no-console
