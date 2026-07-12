@@ -4,6 +4,11 @@ import {
   nextCompositeDoorNumber,
 } from "#asciiflow/client/composite_door";
 import {
+  getActiveCompositeDoorTemplates,
+  parseCompositeDoorTemplateFile,
+} from "#asciiflow/client/composite_door_registry";
+import { parseDimensionFormula } from "#asciiflow/client/dimension_formula";
+import {
   DOOR_DIRECTIONS,
   DOOR_LABEL_OFFSET,
   DoorTypeCode,
@@ -647,13 +652,132 @@ function NumberField({
   );
 }
 
+/**
+ * Multi-line dimension formula box: first line is the base value, every
+ * line after it a signed delta ("+18"/"-45") — see dimension_formula.ts.
+ * Shows the live-computed total next to the label so you see the result
+ * (e.g. "= 2384") without having to compute it yourself or place the door
+ * first.
+ */
+function FormulaField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const { total, errors } = parseDimensionFormula(value);
+  return (
+    <label className={styles.compositeDoorField}>
+      <span className={styles.viewLabel}>
+        {label} {errors.length === 0 && <span className={styles.compositeDoorTotal}>= {total}</span>}
+      </span>
+      <textarea
+        className={styles.compositeDoorTextarea}
+        value={value}
+        rows={3}
+        title="first line is the base value; every line after it must be a signed delta, e.g. +18 or -45"
+        onKeyDown={(e) => {
+          // Let Enter insert a newline (multi-line input) instead of being
+          // swallowed by stopKeys' usual single-line handling, but still
+          // stop every other key from reaching the canvas' global shortcuts.
+          e.stopPropagation();
+        }}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </label>
+  );
+}
+
 function CompositeDoorPanel() {
   const settings = useAppStore((s) => s.compositeDoor);
   const canvasVersion = useAppStore((s) => s.canvasVersion);
+  // Re-render whenever a custom template file is loaded/cleared —
+  // getActiveCompositeDoorTemplates() below reads live module state, not
+  // React state, so this counter is what actually makes the menu update.
+  useAppStore((s) => s.compositeDoorTemplateRegistryVersion);
+  const templates = getActiveCompositeDoorTemplates();
+  const hasCustomTemplates =
+    Object.keys(store.customCompositeDoorTemplates).length > 0;
   const nextNum = nextCompositeDoorNumber(store.currentCanvas.committed);
+  const [toastMessage, setToastMessage] = useState<string>(null);
+  const templateFileInputRef = useRef<HTMLInputElement>(null);
+
+  async function handleLoadTemplates(file: File) {
+    const text = await file.text();
+    const { registry, errors } = parseCompositeDoorTemplateFile(text);
+    const loadedNames = Object.keys(registry);
+    if (loadedNames.length > 0) {
+      store.loadCustomCompositeDoorTemplates(registry);
+    }
+    if (loadedNames.length === 0) {
+      setToastMessage(
+        errors.length > 0
+          ? `no templates loaded — ${errors[0]}`
+          : "no templates found in file"
+      );
+    } else {
+      setToastMessage(
+        `loaded ${loadedNames.length} template(s): ${loadedNames.join(", ")}` +
+          (errors.length > 0 ? ` (${errors.length} rejected, see console)` : "")
+      );
+      if (errors.length > 0) {
+        // tslint:disable-next-line: no-console
+        console.warn("composite door template entries rejected:", errors);
+      }
+    }
+  }
 
   return (
     <div className={styles.drawPanel}>
+      <div className={styles.doorRow}>
+        <span className={styles.viewLabel}>template:</span>
+        {templates.map((template) => (
+          <button
+            key={template.name}
+            className={styles.doorBtn}
+            title={`box ${template.boxWidth}x${template.boxHeight}, lock ${template.lockSide}`}
+            onClick={() => store.applyCompositeDoorTemplate(template)}
+          >
+            {template.name}
+          </button>
+        ))}
+        <span className={styles.sep}>{"│"}</span>
+        <ActionBtn
+          color="var(--color-warning)"
+          title="Load new composite door templates from a .json definition file"
+          onClick={() => templateFileInputRef.current?.click()}
+        >
+          load templates
+        </ActionBtn>
+        {hasCustomTemplates && (
+          <ActionBtn
+            color="var(--color-danger)"
+            title="Remove all custom-loaded templates, keep only the built-ins"
+            onClick={() => {
+              store.resetCustomCompositeDoorTemplates();
+              setToastMessage("custom templates cleared");
+            }}
+          >
+            reset templates
+          </ActionBtn>
+        )}
+        <input
+          ref={templateFileInputRef}
+          type="file"
+          accept=".json"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) {
+              handleLoadTemplates(file);
+            }
+            e.target.value = "";
+          }}
+        />
+      </div>
       <div className={styles.doorRow}>
         <NumberField
           label="box w:"
@@ -692,15 +816,15 @@ function CompositeDoorPanel() {
         </button>
         {settings.showDimensions && (
           <>
-            <NumberField
+            <FormulaField
               label="height:"
-              value={settings.heightValue}
-              onChange={(heightValue) => store.setCompositeDoor({ heightValue })}
+              value={settings.heightFormula}
+              onChange={(heightFormula) => store.setCompositeDoor({ heightFormula })}
             />
-            <NumberField
+            <FormulaField
               label="width:"
-              value={settings.widthValue}
-              onChange={(widthValue) => store.setCompositeDoor({ widthValue })}
+              value={settings.widthFormula}
+              onChange={(widthFormula) => store.setCompositeDoor({ widthFormula })}
             />
           </>
         )}
@@ -708,7 +832,13 @@ function CompositeDoorPanel() {
       <div className={styles.drawHint}>
         click the canvas to place door <strong>{compositeDoorIdLabel(nextNum)}</strong>
         {" │ "}arrow keys ← / → change which edge the lock is on
+        {" │ "}dimension boxes: first line is the base value, following lines are +/- deltas
       </div>
+      <Toast
+        open={toastMessage !== null}
+        message={toastMessage ?? ""}
+        onClose={() => setToastMessage(null)}
+      />
     </div>
   );
 }
@@ -745,7 +875,7 @@ function HelpContent() {
         <span style={{ color: "var(--color-danger)" }}>door</span>
         <span>click to stamp a door symbol. export/import the door schedule as excel (.xlsx), or load more door types from a .json/.txt definition file</span>
         <span style={{ color: "var(--color-brand)" }}>door+</span>
-        <span>click to stamp a composite door item: box + lock + dimension chains + auto-numbered ID, as one movable unit</span>
+        <span>click to stamp a composite door item: box + lock + dimension chains + auto-numbered ID, as one movable unit. pick a preset from the template menu or load more from a .json file; height/width accept a multi-line base+delta formula</span>
       </div>
       <div className={styles.helpDivider} />
       <div className={styles.helpSection}>navigation</div>

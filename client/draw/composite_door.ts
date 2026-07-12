@@ -5,6 +5,7 @@ import {
   generateCompositeDoor,
   nextCompositeDoorNumber,
 } from "#asciiflow/client/composite_door";
+import { parseDimensionFormula } from "#asciiflow/client/dimension_formula";
 import { AbstractDrawFunction } from "#asciiflow/client/draw/function";
 import { store } from "#asciiflow/client/store";
 import { textToLayer } from "#asciiflow/client/text_utils";
@@ -32,6 +33,8 @@ export class DrawCompositeDoor extends AbstractDrawFunction {
   private preview(position: Vector) {
     const num = nextCompositeDoorNumber(store.currentCanvas.committed);
     const settings = store.compositeDoor;
+    const heightFormula = parseDimensionFormula(settings.heightFormula);
+    const widthFormula = parseDimensionFormula(settings.widthFormula);
     const spec: CompositeDoorSpec = {
       boxWidth: settings.boxWidth,
       boxHeight: settings.boxHeight,
@@ -39,8 +42,8 @@ export class DrawCompositeDoor extends AbstractDrawFunction {
       description: [`[ID: ${compositeDoorIdLabel(num)}]`],
       ...(settings.showDimensions
         ? {
-            heightChain: { values: [settings.heightValue] },
-            widthChain: { parts: [settings.widthValue], result: settings.widthValue },
+            heightChain: { values: [...heightFormula.terms, heightFormula.total] },
+            widthChain: { parts: widthFormula.terms, result: widthFormula.total },
           }
         : {}),
     };

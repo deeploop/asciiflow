@@ -329,6 +329,26 @@
   border-color: var(--color-accent);
 }
 
+.compositeDoorTextarea {
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+  width: 6em;
+  background: none;
+  border: 1px solid var(--color-border-light);
+  color: var(--color-text);
+  padding: 1px 4px;
+  outline: none;
+  resize: vertical;
+}
+
+.compositeDoorTextarea:focus {
+  border-color: var(--color-accent);
+}
+
+.compositeDoorTotal {
+  color: var(--color-text-muted);
+}
+
 /* --- Character picker (in second row) --- */
 
 .charPicker {

@@ -1,4 +1,10 @@
 import {
+  clearCustomCompositeDoorTemplates as clearCustomCompositeDoorTemplatesModule,
+  CompositeDoorTemplate,
+  getCustomCompositeDoorTemplates,
+  setCustomCompositeDoorTemplates as setCustomCompositeDoorTemplatesModule,
+} from "#asciiflow/client/composite_door_registry";
+import {
   clearCustomDoorRegistry as clearCustomDoorRegistryModule,
   DoorConfig,
   DoorDirectionCode,
@@ -41,9 +47,20 @@ export interface ICompositeDoorSettings {
   boxHeight: number;
   lockSide: "left" | "right";
   showDimensions: boolean;
-  heightValue: number;
-  widthValue: number;
+  /** Multi-line dimension formula text — see dimension_formula.ts. */
+  heightFormula: string;
+  /** Multi-line dimension formula text — see dimension_formula.ts. */
+  widthFormula: string;
 }
+
+const DEFAULT_COMPOSITE_DOOR: ICompositeDoorSettings = {
+  boxWidth: 14,
+  boxHeight: 6,
+  lockSide: "left",
+  showDimensions: true,
+  heightFormula: "2400",
+  widthFormula: "900",
+};
 
 export interface IModifierKeys {
   shift?: boolean;
@@ -146,6 +163,9 @@ function writePersistent<T>(
 setCustomDoorRegistryModule(
   readPersistent<Record<string, DoorConfig>>("customDoorRegistry", {})
 );
+setCustomCompositeDoorTemplatesModule(
+  readPersistent<Record<string, CompositeDoorTemplate>>("customCompositeDoorTemplates", {})
+);
 
 // ---------------------------------------------------------------------------
 // Zustand store
@@ -167,6 +187,9 @@ export interface AppState {
   // give components something to subscribe to.
   doorRegistryVersion: number;
   compositeDoor: ICompositeDoorSettings;
+  // Same purpose as doorRegistryVersion, for the composite-door template
+  // registry (composite_door_registry.ts).
+  compositeDoorTemplateRegistryVersion: number;
   altPressed: boolean;
   currentCursor: string;
   modifierKeys: IModifierKeys;
@@ -199,14 +222,17 @@ function initialState(): AppState {
     ),
     doorDirection: readPersistent<DoorDirectionCode>("doorDirection", "IL"),
     doorRegistryVersion: 0,
-    compositeDoor: readPersistent<ICompositeDoorSettings>("compositeDoor", {
-      boxWidth: 14,
-      boxHeight: 6,
-      lockSide: "left",
-      showDimensions: true,
-      heightValue: 2400,
-      widthValue: 900,
-    }),
+    // Merged over the defaults (rather than falling back to them wholesale)
+    // so a pre-existing localStorage blob from before heightFormula/
+    // widthFormula existed (the old shape had heightValue/widthValue
+    // instead) still comes out with valid formula fields — the old keys
+    // just become harmless leftovers, and the new ones fall back to
+    // DEFAULT_COMPOSITE_DOOR since they were never present to override it.
+    compositeDoor: {
+      ...DEFAULT_COMPOSITE_DOOR,
+      ...readPersistent<Partial<ICompositeDoorSettings>>("compositeDoor", {}),
+    },
+    compositeDoorTemplateRegistryVersion: 0,
     altPressed: false,
     currentCursor: "default",
     modifierKeys: {},
@@ -373,6 +399,45 @@ export const store = {
   },
   setCompositeDoorLockSide(side: "left" | "right") {
     store.setCompositeDoor({ lockSide: side });
+  },
+
+  // Custom composite-door template registry (runtime-loaded, persisted).
+  // Same pattern as customDoorRegistry above: the registry data lives in
+  // composite_door_registry.ts module state, this keeps it in sync with
+  // localStorage and bumps compositeDoorTemplateRegistryVersion so the
+  // template menu re-renders. Callers must have already validated every
+  // entry (see parseCompositeDoorTemplateFile) — this does not re-validate.
+  get customCompositeDoorTemplates() {
+    return getCustomCompositeDoorTemplates();
+  },
+  get compositeDoorTemplateRegistryVersion() {
+    return useAppStore.getState().compositeDoorTemplateRegistryVersion;
+  },
+  loadCustomCompositeDoorTemplates(registry: Record<string, CompositeDoorTemplate>) {
+    const merged = { ...getCustomCompositeDoorTemplates(), ...registry };
+    setCustomCompositeDoorTemplatesModule(merged);
+    writePersistent("customCompositeDoorTemplates", merged);
+    useAppStore.setState((s) => ({
+      compositeDoorTemplateRegistryVersion: s.compositeDoorTemplateRegistryVersion + 1,
+    }));
+  },
+  resetCustomCompositeDoorTemplates() {
+    clearCustomCompositeDoorTemplatesModule();
+    writePersistent("customCompositeDoorTemplates", {});
+    useAppStore.setState((s) => ({
+      compositeDoorTemplateRegistryVersion: s.compositeDoorTemplateRegistryVersion + 1,
+    }));
+  },
+  /** Prefills the composite-door panel from a named template — still freely editable afterward. */
+  applyCompositeDoorTemplate(template: CompositeDoorTemplate) {
+    store.setCompositeDoor({
+      boxWidth: template.boxWidth,
+      boxHeight: template.boxHeight,
+      lockSide: template.lockSide,
+      showDimensions: Boolean(template.heightFormula || template.widthFormula),
+      heightFormula: template.heightFormula ?? DEFAULT_COMPOSITE_DOOR.heightFormula,
+      widthFormula: template.widthFormula ?? DEFAULT_COMPOSITE_DOOR.widthFormula,
+    });
   },
 
   // Selected tool mode
