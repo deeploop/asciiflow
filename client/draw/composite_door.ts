@@ -5,6 +5,7 @@ import {
   generateCompositeDoor,
   nextCompositeDoorNumber,
 } from "#asciiflow/client/composite_door";
+import { registerCompositeDoorInstance } from "#asciiflow/client/composite_door_instances";
 import { parseDimensionFormula } from "#asciiflow/client/dimension_formula";
 import { AbstractDrawFunction } from "#asciiflow/client/draw/function";
 import { store } from "#asciiflow/client/store";
@@ -18,6 +19,9 @@ import { Vector } from "#asciiflow/client/vector";
  * DrawDoor, one level up in what gets stamped per click.
  */
 export class DrawCompositeDoor extends AbstractDrawFunction {
+  private lastSpec: CompositeDoorSpec;
+  private lastOrigin: Vector;
+
   start(position: Vector) {
     this.preview(position);
   }
@@ -28,6 +32,12 @@ export class DrawCompositeDoor extends AbstractDrawFunction {
 
   end() {
     store.currentCanvas.commitScratch();
+    // Track this placement so a later border-drag resize (draw/select.ts)
+    // can regenerate its dimensions/label/lock at the new size — see
+    // composite_door_instances.ts.
+    if (this.lastSpec && this.lastOrigin) {
+      registerCompositeDoorInstance(this.lastSpec, this.lastOrigin);
+    }
   }
 
   private preview(position: Vector) {
@@ -56,6 +66,8 @@ export class DrawCompositeDoor extends AbstractDrawFunction {
       position.y - Math.floor(lines.length / 2)
     );
     store.currentCanvas.setScratchLayer(textToLayer(template, origin));
+    this.lastSpec = spec;
+    this.lastOrigin = origin;
   }
 
   handleKey(value: string) {

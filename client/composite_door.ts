@@ -88,6 +88,28 @@ function lockInteriorRow(spec: CompositeDoorSpec): number | null {
 }
 
 /**
+ * Where the box's own top-left corner lands within generateCompositeDoor()'s
+ * output block — everything to its left/above is the height chain gutter
+ * and width formula/result rows. Exported so callers that need to place or
+ * re-place a generated block against a known on-canvas box position (e.g.
+ * the resize-redraw hook in draw/select.ts) can derive that placement
+ * without duplicating this layout math and risking it drifting out of sync
+ * with the generator itself.
+ */
+export function compositeDoorBoxOrigin(spec: CompositeDoorSpec): { left: number; top: number } {
+  const heightValues = spec.heightChain?.values ?? [];
+  const heightChainWidth =
+    heightValues.length > 0
+      ? Math.max(1, ...heightValues.map((v) => String(v).length))
+      : 0;
+  // No gutter reserved for the lock — it renders inside the box (see the
+  // module docstring), so it needs no room outside the border.
+  const boxLeft = heightChainWidth + (heightChainWidth > 0 ? 1 : 0);
+  const boxTop = spec.widthChain ? 2 : 0;
+  return { left: boxLeft, top: boxTop };
+}
+
+/**
  * Renders a composite door item as pasteable ASCII text. Every element's
  * position is derived from `spec` — box size, chain lengths, and lock side
  * are all data, so the same function scales to any size without manual
@@ -99,14 +121,11 @@ export function generateCompositeDoor(spec: CompositeDoorSpec): string {
     heightValues.length > 0
       ? Math.max(1, ...heightValues.map((v) => String(v).length))
       : 0;
-  // No gutter reserved for the lock — it renders inside the box (see the
-  // module docstring), so it needs no room outside the border.
-  const boxLeft = heightChainWidth + (heightChainWidth > 0 ? 1 : 0);
+  const { left: boxLeft, top: boxTop } = compositeDoorBoxOrigin(spec);
   const boxRight = boxLeft + spec.boxWidth + 1;
 
   const ROW_WIDTH_FORMULA = 0;
   const ROW_WIDTH_RESULT = 1;
-  const boxTop = spec.widthChain ? 2 : 0;
   const boxBottom = boxTop + spec.boxHeight + 1;
 
   const grid = new TextGrid();

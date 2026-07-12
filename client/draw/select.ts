@@ -6,6 +6,11 @@ import {
   isBoxDrawing,
 } from "#asciiflow/client/characters";
 import { Box } from "#asciiflow/client/common";
+import {
+  CompositeDoorInstance,
+  findInstanceInBox,
+  regenerateAfterResize,
+} from "#asciiflow/client/composite_door_instances";
 import { KEY_BACKSPACE, KEY_DELETE, UNICODE } from "#asciiflow/client/constants";
 import { Direction } from "#asciiflow/client/direction";
 import {
@@ -58,6 +63,13 @@ export class DrawSelect extends AbstractDrawFunction {
 
   // Sub-tools / sub-modes.
   private moveTool: DrawMove;
+
+  // Set when a border-drag grab (moveTool below) started on a box that's a
+  // tracked composite-door instance — see composite_door_instances.ts. If
+  // set when the drag ends, the resize also regenerates the item's
+  // dimensions/label/lock at its new size, instead of leaving them behind
+  // at their pre-resize position while only the border moved.
+  private resizingInstance: CompositeDoorInstance | null = null;
 
   // Dragging a line tip: reshape the line like the line tool (free 2D + corners).
   private lineReshape: {
@@ -126,6 +138,13 @@ export class DrawSelect extends AbstractDrawFunction {
     // Box-drawing char (a box border or a free line/connector) → resize /
     // move that line, exactly as before. Box edges stay resizable.
     if (isBoxDrawing(value)) {
+      // If this border belongs to a tracked composite-door instance,
+      // remember it so end() can regenerate the item once the drag settles
+      // on a final size — findBox works from a border cell too (it seeds
+      // from an off-border neighbour), so this doesn't need a special case
+      // for "grabbed the corner" vs. "grabbed an edge".
+      const grabbedBox = findBox(committed, position);
+      this.resizingInstance = grabbedBox ? findInstanceInBox(grabbedBox) : null;
       this.moveTool = new DrawMove();
       this.moveTool.start(position);
       return;
@@ -189,6 +208,10 @@ export class DrawSelect extends AbstractDrawFunction {
     } else if (this.moveTool != null) {
       this.moveTool.end();
       this.moveTool = null;
+      if (this.resizingInstance) {
+        regenerateAfterResize(this.resizingInstance);
+        this.resizingInstance = null;
+      }
     } else if (this.selecting) {
       this.finishSelect();
     }
@@ -405,6 +428,7 @@ export class DrawSelect extends AbstractDrawFunction {
     this.attachments = [];
     this.lineReshape = null;
     this.moveTool = null;
+    this.resizingInstance = null;
     this.dragStart = null;
     this.dragEnd = null;
     this.selecting = false;
