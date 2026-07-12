@@ -305,6 +305,30 @@
   font-weight: bold;
 }
 
+/* --- Composite door panel number fields --- */
+
+.compositeDoorField {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.compositeDoorInput {
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+  width: 4.5em;
+  background: none;
+  border: 1px solid var(--color-border-light);
+  color: var(--color-text);
+  padding: 1px 4px;
+  outline: none;
+}
+
+.compositeDoorInput:focus {
+  border-color: var(--color-accent);
+}
+
 /* --- Character picker (in second row) --- */
 
 .charPicker {

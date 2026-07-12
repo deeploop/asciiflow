@@ -8,6 +8,7 @@ import {
   setCustomDoorRegistry as setCustomDoorRegistryModule,
 } from "#asciiflow/client/doors";
 import { DrawBox } from "#asciiflow/client/draw/box";
+import { DrawCompositeDoor } from "#asciiflow/client/draw/composite_door";
 import { DrawDoor } from "#asciiflow/client/draw/door";
 import { DrawFreeform } from "#asciiflow/client/draw/freeform";
 import { IDrawFunction } from "#asciiflow/client/draw/function";
@@ -32,6 +33,16 @@ export enum ToolMode {
   LINES = 4,
   TEXT = 7,
   DOOR = 8,
+  COMPOSITE_DOOR = 9,
+}
+
+export interface ICompositeDoorSettings {
+  boxWidth: number;
+  boxHeight: number;
+  lockSide: "left" | "right";
+  showDimensions: boolean;
+  heightValue: number;
+  widthValue: number;
 }
 
 export interface IModifierKeys {
@@ -155,6 +166,7 @@ export interface AppState {
   // shouldn't depend on the Zustand store. This counter exists purely to
   // give components something to subscribe to.
   doorRegistryVersion: number;
+  compositeDoor: ICompositeDoorSettings;
   altPressed: boolean;
   currentCursor: string;
   modifierKeys: IModifierKeys;
@@ -187,6 +199,14 @@ function initialState(): AppState {
     ),
     doorDirection: readPersistent<DoorDirectionCode>("doorDirection", "IL"),
     doorRegistryVersion: 0,
+    compositeDoor: readPersistent<ICompositeDoorSettings>("compositeDoor", {
+      boxWidth: 14,
+      boxHeight: 6,
+      lockSide: "left",
+      showDimensions: true,
+      heightValue: 2400,
+      widthValue: 900,
+    }),
     altPressed: false,
     currentCursor: "default",
     modifierKeys: {},
@@ -231,6 +251,7 @@ const selectTool = new DrawSelect();
 const freeformTool = new DrawFreeform();
 const textTool = new DrawText();
 const doorTool = new DrawDoor();
+const compositeDoorTool = new DrawCompositeDoor();
 const nullTool = new DrawNull();
 
 // ---------------------------------------------------------------------------
@@ -280,6 +301,7 @@ export const store = {
   freeformTool,
   textTool,
   doorTool,
+  compositeDoorTool,
   nullTool,
 
   // Route
@@ -342,6 +364,17 @@ export const store = {
     }));
   },
 
+  // Composite door stamp settings (persistent)
+  get compositeDoor() {
+    return useAppStore.getState().compositeDoor;
+  },
+  setCompositeDoor(patch: Partial<ICompositeDoorSettings>) {
+    setPersistent("compositeDoor", { ...useAppStore.getState().compositeDoor, ...patch });
+  },
+  setCompositeDoorLockSide(side: "left" | "right") {
+    store.setCompositeDoor({ lockSide: side });
+  },
+
   // Selected tool mode
   get selectedToolMode() {
     return useAppStore.getState().selectedToolMode;
@@ -377,6 +410,8 @@ export const store = {
       ? textTool
       : mode === ToolMode.DOOR
       ? doorTool
+      : mode === ToolMode.COMPOSITE_DOOR
+      ? compositeDoorTool
       : mode === ToolMode.SELECT
       ? selectTool
       : nullTool;

@@ -107,6 +107,9 @@ export class Controller {
       } else if (event.keyCode === "7".charCodeAt(0)) {
         store.setToolMode(ToolMode.DOOR);
         event.preventDefault();
+      } else if (event.keyCode === "8".charCodeAt(0)) {
+        store.setToolMode(ToolMode.COMPOSITE_DOOR);
+        event.preventDefault();
       }
     }
     if (event.ctrlKey || event.metaKey) {

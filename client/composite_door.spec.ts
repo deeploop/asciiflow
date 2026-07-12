@@ -1,9 +1,12 @@
 import {
   CompositeDoorSpec,
   checkCompositeDoorOverflow,
+  compositeDoorIdLabel,
   generateCompositeDoor,
+  nextCompositeDoorNumber,
 } from "#asciiflow/client/composite_door";
 import { cellsInBox, findBox } from "#asciiflow/client/draw/entity";
+import { Layer } from "#asciiflow/client/layer";
 import { textToLayer } from "#asciiflow/client/text_utils";
 import { Vector } from "#asciiflow/client/vector";
 import { expect } from "chai";
@@ -184,5 +187,33 @@ describe("composite_door", () => {
     // chains and description are recomputed for the new size directly.
     expect(big).contains("[ID: Door-01]");
     expect(big).contains("1192");
+  });
+
+  describe("stamp-tool auto-numbering", () => {
+    it("starts at 1 on an empty canvas", () => {
+      expect(nextCompositeDoorNumber(new Layer())).equals(1);
+    });
+
+    it("scans existing 'Door-NN' labels and continues past the highest", () => {
+      const layer = new Layer();
+      layer.setFrom(
+        textToLayer(
+          generateCompositeDoor({ boxWidth: 14, boxHeight: 4, description: [`[ID: ${compositeDoorIdLabel(1)}]`] }),
+          new Vector(0, 0)
+        )
+      );
+      layer.setFrom(
+        textToLayer(
+          generateCompositeDoor({ boxWidth: 14, boxHeight: 4, description: [`[ID: ${compositeDoorIdLabel(5)}]`] }),
+          new Vector(40, 0)
+        )
+      );
+      expect(nextCompositeDoorNumber(layer)).equals(6);
+    });
+
+    it("zero-pads single-digit numbers, matching the door module's label style", () => {
+      expect(compositeDoorIdLabel(1)).equals("Door-01");
+      expect(compositeDoorIdLabel(12)).equals("Door-12");
+    });
   });
 });

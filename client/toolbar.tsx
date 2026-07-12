@@ -1,5 +1,9 @@
 import { ASCII, UNICODE } from "#asciiflow/client/constants";
 import {
+  compositeDoorIdLabel,
+  nextCompositeDoorNumber,
+} from "#asciiflow/client/composite_door";
+import {
   DOOR_DIRECTIONS,
   DOOR_LABEL_OFFSET,
   DoorTypeCode,
@@ -69,6 +73,7 @@ const TOOLS: Array<{
   { mode: ToolMode.LINES, label: "line", testId: "tool-line", shortcut: "5", color: "var(--color-accent)" },
   { mode: ToolMode.TEXT, label: "text", testId: "tool-text", shortcut: "6", color: "var(--color-warning)" },
   { mode: ToolMode.DOOR, label: "door", testId: "tool-door", shortcut: "7", color: "var(--color-danger)" },
+  { mode: ToolMode.COMPOSITE_DOOR, label: "door+", testId: "tool-composite-door", shortcut: "8", color: "var(--color-brand)" },
 ];
 
 // Helper: stop all keyboard event propagation so controller doesn't intercept
@@ -117,7 +122,11 @@ export function Toolbar() {
   const showDoorPicker =
     !isShared && selectedToolMode === ToolMode.DOOR && panel === null;
 
-  const showSecondRow = panel !== null || showFreeformPicker || showDoorPicker;
+  const showCompositeDoorPicker =
+    !isShared && selectedToolMode === ToolMode.COMPOSITE_DOOR && panel === null;
+
+  const showSecondRow =
+    panel !== null || showFreeformPicker || showDoorPicker || showCompositeDoorPicker;
 
   return (
     <div className={styles.topBarWrapper}>
@@ -227,6 +236,7 @@ export function Toolbar() {
           {panel === "view" && <ViewPanel />}
           {showFreeformPicker && <DrawPanel />}
           {showDoorPicker && <DoorPanel />}
+          {showCompositeDoorPicker && <CompositeDoorPanel />}
         </div>
       )}
     </div>
@@ -602,6 +612,108 @@ function DoorPanel() {
 }
 
 // ---------------------------------------------------------------------------
+// Composite door panel — box/lock/dimension settings for the "door+" stamp
+// tool, which places a whole box+lock+chains+description unit per click.
+// ---------------------------------------------------------------------------
+
+function NumberField({
+  label,
+  value,
+  onChange,
+  min = 1,
+}: {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+  min?: number;
+}) {
+  return (
+    <label className={styles.compositeDoorField}>
+      <span className={styles.viewLabel}>{label}</span>
+      <input
+        type="number"
+        className={styles.compositeDoorInput}
+        value={value}
+        min={min}
+        onKeyDown={stopKeys}
+        onChange={(e) => {
+          const parsed = parseInt(e.target.value, 10);
+          if (!isNaN(parsed) && parsed >= min) {
+            onChange(parsed);
+          }
+        }}
+      />
+    </label>
+  );
+}
+
+function CompositeDoorPanel() {
+  const settings = useAppStore((s) => s.compositeDoor);
+  const canvasVersion = useAppStore((s) => s.canvasVersion);
+  const nextNum = nextCompositeDoorNumber(store.currentCanvas.committed);
+
+  return (
+    <div className={styles.drawPanel}>
+      <div className={styles.doorRow}>
+        <NumberField
+          label="box w:"
+          value={settings.boxWidth}
+          onChange={(boxWidth) => store.setCompositeDoor({ boxWidth })}
+        />
+        <NumberField
+          label="box h:"
+          value={settings.boxHeight}
+          onChange={(boxHeight) => store.setCompositeDoor({ boxHeight })}
+        />
+        <span className={styles.sep}>{"│"}</span>
+        <span className={styles.viewLabel}>lock:</span>
+        {(["left", "right"] as const).map((side) => (
+          <button
+            key={side}
+            className={[
+              styles.doorBtn,
+              settings.lockSide === side ? styles.doorBtnActive : "",
+            ].filter(Boolean).join(" ")}
+            onClick={() => store.setCompositeDoorLockSide(side)}
+          >
+            {side}
+          </button>
+        ))}
+      </div>
+      <div className={styles.doorRow}>
+        <button
+          className={[
+            styles.doorBtn,
+            settings.showDimensions ? styles.doorBtnActive : "",
+          ].filter(Boolean).join(" ")}
+          onClick={() => store.setCompositeDoor({ showDimensions: !settings.showDimensions })}
+        >
+          dimensions: {settings.showDimensions ? "on" : "off"}
+        </button>
+        {settings.showDimensions && (
+          <>
+            <NumberField
+              label="height:"
+              value={settings.heightValue}
+              onChange={(heightValue) => store.setCompositeDoor({ heightValue })}
+            />
+            <NumberField
+              label="width:"
+              value={settings.widthValue}
+              onChange={(widthValue) => store.setCompositeDoor({ widthValue })}
+            />
+          </>
+        )}
+      </div>
+      <div className={styles.drawHint}>
+        click the canvas to place door <strong>{compositeDoorIdLabel(nextNum)}</strong>
+        {" │ "}arrow keys ← / → change which edge the lock is on
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Help content (table layout with colored shortcuts and links)
 // ---------------------------------------------------------------------------
 
@@ -632,6 +744,8 @@ function HelpContent() {
         <span>click and type. <Kbd>enter</Kbd> commit, <Kbd>shift+enter</Kbd> newline</span>
         <span style={{ color: "var(--color-danger)" }}>door</span>
         <span>click to stamp a door symbol. export/import the door schedule as excel (.xlsx), or load more door types from a .json/.txt definition file</span>
+        <span style={{ color: "var(--color-brand)" }}>door+</span>
+        <span>click to stamp a composite door item: box + lock + dimension chains + auto-numbered ID, as one movable unit</span>
       </div>
       <div className={styles.helpDivider} />
       <div className={styles.helpSection}>navigation</div>

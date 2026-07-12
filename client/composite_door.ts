@@ -27,6 +27,8 @@
  * click-drag). See DOOR_COMPOSITE_ITEM.md for the verification transcript.
  */
 
+import { ILayerView } from "#asciiflow/client/layer";
+import { layerToText } from "#asciiflow/client/text_utils";
 import { displayWidth, TextGrid } from "#asciiflow/client/text_grid";
 
 export interface CompositeDoorWidthChain {
@@ -215,4 +217,31 @@ export function checkCompositeDoorOverflow(spec: CompositeDoorSpec): string[] {
   }
 
   return warnings;
+}
+
+// ---------------------------------------------------------------------------
+// Auto-numbering for the interactive stamp tool
+// ---------------------------------------------------------------------------
+
+/** e.g. 1 -> "Door-01". Embed this in a description line to make it auto-numbered. */
+export function compositeDoorIdLabel(num: number): string {
+  return `Door-${String(num).padStart(2, "0")}`;
+}
+
+const COMPOSITE_DOOR_ID_REGEX = /Door-(\d+)/g;
+
+/**
+ * Next free sequence number, scanned from any "Door-NN" text already on the
+ * canvas — same convention as doors.ts's nextDoorNumber, but composite door
+ * items don't have a fixed label format (the description is free text), so
+ * this just looks for the ID pattern anywhere rather than parsing a
+ * structured label.
+ */
+export function nextCompositeDoorNumber(layer: ILayerView): number {
+  const text = layerToText(layer);
+  let max = 0;
+  for (const match of text.matchAll(COMPOSITE_DOOR_ID_REGEX)) {
+    max = Math.max(max, parseInt(match[1], 10));
+  }
+  return max + 1;
 }
