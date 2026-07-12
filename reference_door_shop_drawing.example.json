@@ -1,0 +1,48 @@
+{
+  "headerInfo": [
+    "二三",
+    "信義路四段30巷16號12F",
+    "密:6789E",
+    "車：B3F-50",
+    "高S0905379331",
+    "115.03.18安裝(胖)"
+  ],
+  "locationLabels": ["廚", "客"],
+  "modelLine": "J01(吊)(黑)+5T茶玻+分隔把",
+  "widthFormula": "1114+18+7+24",
+  "panelCount": 4,
+  "panelWidth": 10,
+  "bodyHeight": 14,
+  "cornerLabel": "J02",
+  "dimensionGroups": [
+    { "label": "581", "fromPanel": 0, "toPanel": 1 },
+    { "label": "581", "fromPanel": 2, "toPanel": 3 }
+  ],
+  "heightChainLeft": { "values": [2439, "-45", "-10", 2384] },
+  "reveals": [
+    { "panel": 0, "label": "看100" },
+    { "panel": 3, "label": "看100" }
+  ],
+  "handle": {
+    "panel": 0,
+    "label": "大側暗把手",
+    "positionLabel": "中心至下1000"
+  },
+  "bottomGroups": [
+    { "fromPanel": 0, "toPanel": 1 },
+    { "fromPanel": 2, "toPanel": 3 }
+  ],
+  "bottomLabel": "防晃輪",
+  "bottomLabelRight": "不破",
+  "accessories": {
+    "row": 4,
+    "col": 56,
+    "title": "附",
+    "lines": ["緩軌1671*2", "台制緩*2"]
+  },
+  "wallDetail": {
+    "row": 19,
+    "col": 56,
+    "dimension": 595
+  }
+}

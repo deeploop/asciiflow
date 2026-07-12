@@ -45,7 +45,46 @@ export interface ElevationBottomGroup {
   toPanel: number;
 }
 
+/**
+ * A block of freestanding text placed at an absolute (row, col) on the
+ * shared grid — used for auxiliary blocks (accessory lists, wall-junction
+ * details) whose position relative to the door body varies by drawing and
+ * isn't implied by panel/dimension data the way everything else here is.
+ */
+export interface ElevationAccessories {
+  row: number;
+  col: number;
+  /** First line of the block, e.g. "附". */
+  title?: string;
+  /** Lines listed below the title, e.g. ["緩軌1671*2", "台制緩*2"]. */
+  lines: string[];
+}
+
+/**
+ * Small hatched wall-junction detail (the corner cutaway symbol showing a
+ * wall in cross-section, with a pair of hardware blocks and a dimension) —
+ * a compact plan/section callout, not the full door elevation.
+ */
+export interface WallHatchDetail {
+  row: number;
+  col: number;
+  /** Dimension label under the hatch wedge, e.g. 595. */
+  dimension: string | number;
+  /** Width, in cells, of the wedge at its widest (top) row. Default 12. */
+  width?: number;
+  /** Height, in rows, of the hatch wedge. Default 4. */
+  height?: number;
+}
+
 export interface ElevationSpec {
+  /**
+   * A single info row above everything else — project code, address, lock
+   * code, parking/elevator note, contact, install date, etc. Rendered as one
+   * row with fields spaced apart; omit for the plain elevation (no shift in
+   * the rows below — every other row is numbered relative to this one, so
+   * adding it doesn't require updating any other spec field).
+   */
+  headerInfo?: string[];
   /** Top-left stacked room/location labels, e.g. ["廚", "客"]. */
   locationLabels?: string[];
   /** Top spec line, e.g. "J01(吊)(黑)+5T茶玻+分隔把". */
@@ -64,13 +103,22 @@ export interface ElevationSpec {
   reveals?: ElevationReveal[];
   handle?: ElevationHandle;
   bottomGroups?: ElevationBottomGroup[];
+  /** Bottom-left label below the frame, e.g. "防晃輪". */
   bottomLabel?: string;
+  /** Bottom-right label below the frame, e.g. "不破". */
+  bottomLabelRight?: string;
+  /** "附" accessory list, e.g. 緩軌1671*2 / 台制緩*2. */
+  accessories?: ElevationAccessories;
+  /** Wall-junction hatch + dimension corner detail. */
+  wallDetail?: WallHatchDetail;
 }
 
 const DEFAULT_PANEL_WIDTH = 10;
 const DEFAULT_BODY_HEIGHT = 14;
 const DEFAULT_REVEAL_ROW_OFFSET = 3;
 const DEFAULT_HANDLE_ROW_OFFSET = 7;
+const DEFAULT_WALL_DETAIL_WIDTH = 12;
+const DEFAULT_WALL_DETAIL_HEIGHT = 4;
 
 /**
  * Generates an elevation shop-drawing as pasteable ASCII text. Coordinates
@@ -99,14 +147,23 @@ export function generateElevationDrawing(spec: ElevationSpec): string {
   const bodyLeft = panelBoundaryCol(0);
   const bodyRight = panelBoundaryCol(spec.panelCount);
 
-  const ROW_MODEL = 0;
-  const ROW_FORMULA = 1;
-  const ROW_DIM = 2; // also the top frame line
+  // headerInfo, if present, is one extra row above everything else — every
+  // other row is numbered relative to it, so adding it doesn't require
+  // updating any other spec field (and omitting it reproduces the original
+  // row numbering exactly, unchanged).
+  const headerRows = spec.headerInfo ? 1 : 0;
+  const ROW_HEADER = 0;
+  const ROW_MODEL = headerRows + 0;
+  const ROW_FORMULA = headerRows + 1;
+  const ROW_DIM = headerRows + 2; // also the top frame line
   const bodyTop = ROW_DIM + 1;
   const bodyBottom = bodyTop + bodyHeight - 1; // also the bottom frame line
   const ROW_BOTTOM_LABEL = bodyBottom + 1;
 
-  locationLabels.forEach((label, i) => grid.write(i, 0, label));
+  if (spec.headerInfo) {
+    grid.write(ROW_HEADER, 0, spec.headerInfo.join("    "));
+  }
+  locationLabels.forEach((label, i) => grid.write(headerRows + i, 0, label));
   grid.writeCentered(ROW_MODEL, bodyLeft, bodyRight, spec.modelLine);
   if (spec.widthFormula) {
     grid.writeCentered(ROW_FORMULA, bodyLeft, bodyRight, spec.widthFormula);
@@ -165,8 +222,59 @@ export function generateElevationDrawing(spec: ElevationSpec): string {
   if (spec.bottomLabel) {
     grid.write(ROW_BOTTOM_LABEL, bodyLeft, spec.bottomLabel);
   }
+  if (spec.bottomLabelRight) {
+    grid.write(ROW_BOTTOM_LABEL, bodyRight - displayWidth(spec.bottomLabelRight) + 1, spec.bottomLabelRight);
+  }
+
+  if (spec.accessories) {
+    const { row, col, title, lines } = spec.accessories;
+    let r = row;
+    if (title) {
+      grid.write(r, col, title);
+      r += 1;
+    }
+    for (const line of lines) {
+      grid.write(r, col, line);
+      r += 1;
+    }
+  }
+
+  if (spec.wallDetail) {
+    renderWallHatchDetail(grid, spec.wallDetail);
+  }
 
   return grid.toString();
+}
+
+/**
+ * Renders the small hatched wall-junction detail: a pair of offset hardware
+ * blocks along the top edge, a hatch wedge (drawn with "╲"/"╱") narrowing
+ * toward a point, and a dimension label underneath. This is a compact
+ * schematic callout, not a to-scale plan drawing — its shape is fixed, only
+ * its size and dimension label come from the spec.
+ */
+function renderWallHatchDetail(grid: TextGrid, detail: WallHatchDetail) {
+  const { row: top, col: left, dimension } = detail;
+  const width = detail.width ?? DEFAULT_WALL_DETAIL_WIDTH;
+  const height = detail.height ?? DEFAULT_WALL_DETAIL_HEIGHT;
+  const mid = Math.floor(width / 2);
+
+  grid.writeCentered(top, left, left + mid, "▬▬");
+  grid.writeCentered(top + 1, left + mid, left + width, "▬▬");
+
+  for (let r = 0; r < height; r++) {
+    const leftCol = left + r;
+    const rightCol = left + width - 1 - r;
+    if (leftCol > rightCol) {
+      break;
+    }
+    grid.setChar(top + 2 + r, leftCol, "╲");
+    if (rightCol !== leftCol) {
+      grid.setChar(top + 2 + r, rightCol, "╱");
+    }
+  }
+
+  grid.writeCentered(top + 2 + height, left, left + width, String(dimension));
 }
 
 // ---------------------------------------------------------------------------
@@ -229,4 +337,91 @@ export function checkElevationOverflow(spec: ElevationSpec): ElevationOverflowWa
   }
 
   return warnings;
+}
+
+// ---------------------------------------------------------------------------
+// Template file loading (JSON) — same all-or-nothing contract as
+// frame_tree.ts's parseFrameTreeFile: a shop drawing is one interdependent
+// layout (panel count drives every column position), so a malformed field
+// makes the whole spec unusable rather than silently rendering with a gap.
+// ---------------------------------------------------------------------------
+
+export interface ElevationSpecParseResult {
+  spec: ElevationSpec | null;
+  errors: string[];
+}
+
+function isStringArray(v: unknown): v is string[] {
+  return Array.isArray(v) && v.every((x) => typeof x === "string");
+}
+
+/**
+ * Parses a shop-drawing template file. JSON only. Validates the fields that
+ * drive layout math (panelCount, modelLine) strictly; optional decorative
+ * fields (headerInfo, accessories, wallDetail, ...) are checked for the
+ * right shape but not exhaustively — this mirrors how loosely the rest of
+ * the app treats display strings, while still catching the "pasted the
+ * wrong JSON" and "typo'd a field name into the wrong nesting level" class
+ * of mistakes that are otherwise silent until you look at the render.
+ */
+export function parseElevationSpecFile(text: string): ElevationSpecParseResult {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (e) {
+    return { spec: null, errors: [`JSON parse error: ${(e as Error).message}`] };
+  }
+  if (typeof raw !== "object" || raw === null) {
+    return { spec: null, errors: ["root must be an object"] };
+  }
+  const obj = raw as Record<string, unknown>;
+  const errors: string[] = [];
+
+  if (typeof obj.modelLine !== "string") {
+    errors.push("modelLine must be a string");
+  }
+  if (typeof obj.panelCount !== "number" || obj.panelCount < 1) {
+    errors.push("panelCount must be a positive number");
+  }
+  if (obj.headerInfo !== undefined && !isStringArray(obj.headerInfo)) {
+    errors.push("headerInfo must be an array of strings");
+  }
+  if (obj.locationLabels !== undefined && !isStringArray(obj.locationLabels)) {
+    errors.push("locationLabels must be an array of strings");
+  }
+  if (obj.dimensionGroups !== undefined) {
+    if (!Array.isArray(obj.dimensionGroups)) {
+      errors.push("dimensionGroups must be an array");
+    } else {
+      obj.dimensionGroups.forEach((g, i) => {
+        const group = g as Record<string, unknown>;
+        if (typeof group?.label !== "string" || typeof group?.fromPanel !== "number" || typeof group?.toPanel !== "number") {
+          errors.push(`dimensionGroups[${i}] must be {label: string, fromPanel: number, toPanel: number}`);
+        }
+      });
+    }
+  }
+  if (obj.heightChainLeft !== undefined) {
+    const values = (obj.heightChainLeft as Record<string, unknown>)?.values;
+    if (!Array.isArray(values) || !values.every((v) => typeof v === "string" || typeof v === "number")) {
+      errors.push("heightChainLeft.values must be an array of strings/numbers");
+    }
+  }
+  if (obj.accessories !== undefined) {
+    const acc = obj.accessories as Record<string, unknown>;
+    if (typeof acc?.row !== "number" || typeof acc?.col !== "number" || !isStringArray(acc?.lines)) {
+      errors.push("accessories must be {row: number, col: number, title?: string, lines: string[]}");
+    }
+  }
+  if (obj.wallDetail !== undefined) {
+    const wd = obj.wallDetail as Record<string, unknown>;
+    if (typeof wd?.row !== "number" || typeof wd?.col !== "number" || (typeof wd?.dimension !== "number" && typeof wd?.dimension !== "string")) {
+      errors.push("wallDetail must be {row: number, col: number, dimension: number|string}");
+    }
+  }
+
+  if (errors.length > 0) {
+    return { spec: null, errors };
+  }
+  return { spec: obj as unknown as ElevationSpec, errors: [] };
 }
