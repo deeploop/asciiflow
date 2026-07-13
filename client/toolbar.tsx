@@ -21,6 +21,7 @@ import {
   scanDoors,
 } from "#asciiflow/client/doors";
 import { ExportPanel } from "#asciiflow/client/export";
+import { IntentRunButton } from "#asciiflow/client/intent_run";
 import { Layer } from "#asciiflow/client/layer";
 import { DrawingId, store, ToolMode, useAppStore } from "#asciiflow/client/store";
 import { DrawingStringifier } from "#asciiflow/client/store/drawing_stringifier";
@@ -219,6 +220,11 @@ export function Toolbar() {
         <PanelBtn id="view" current={panel} onClick={togglePanel}>
           view
         </PanelBtn>
+
+        <Sep />
+
+        {/* Run-intent dev/ops utility — unrelated to drawing, see intent_run.tsx */}
+        <IntentRunButton />
 
         <Sep />
 
