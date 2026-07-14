@@ -6,7 +6,12 @@ import { screenToCell, setCanvasCursor } from "#asciiflow/client/view";
 
 import * as React from "react";
 
-function isInputTarget(event: KeyboardEvent) {
+// Exported (not just used for keydown/keypress here) so app.tsx's document-
+// level copy/cut/paste listeners can use the exact same check — clipboard
+// events have a .target just like keyboard events, and "should this event
+// be handled by the canvas, or left to a plain text field" is the same
+// question either way.
+export function isInputTarget(event: { target: EventTarget | null }) {
   const t = event.target;
   return (
     t instanceof HTMLInputElement ||

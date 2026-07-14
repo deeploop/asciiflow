@@ -4,6 +4,7 @@ import styles from "#asciiflow/client/app.module.css";
 import {
   Controller,
   InputController,
+  isInputTarget,
 } from "#asciiflow/client/controller";
 import { Toolbar } from "#asciiflow/client/toolbar";
 import { DrawingId, store, ToolMode, useAppStore } from "#asciiflow/client/store";
@@ -106,7 +107,15 @@ document.getElementById("root").addEventListener(
 
 // Use native copy/cut events so the browser handles clipboard permissions.
 // This works across Chrome, Safari, and Firefox (including macOS).
+//
+// Each handler bails out early when the event's target is a plain text
+// field (isInputTarget — same check controller.ts uses to keep keyboard
+// shortcuts out of text fields) so copy/cut/paste inside any <input> or
+// <textarea> in the app — the run-intent dialog's endpoint/testArgs
+// fields, the drawing-rename field, etc. — falls through to the browser's
+// normal editing behavior instead of being redirected to the canvas.
 document.addEventListener("copy", (e) => {
+  if (isInputTarget(e)) return;
   if (store.selectTool.selectBox) {
     e.preventDefault();
     const copiedText = layerToText(
@@ -118,6 +127,7 @@ document.addEventListener("copy", (e) => {
 });
 
 document.addEventListener("cut", (e) => {
+  if (isInputTarget(e)) return;
   if (store.selectTool.selectBox) {
     e.preventDefault();
     const copiedText = layerToText(
@@ -131,6 +141,7 @@ document.addEventListener("cut", (e) => {
 });
 
 document.addEventListener("paste", (e) => {
+  if (isInputTarget(e)) return;
   e.preventDefault();
   const clipboardText = e.clipboardData.getData("text");
   // Default to the center of the screen.
