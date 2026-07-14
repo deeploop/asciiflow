@@ -223,7 +223,8 @@ function IntentRunForm() {
         className={styles.compositeDoorTextarea}
         style={{ width: "100%", minHeight: "140px", boxSizing: "border-box" }}
         value={lastResult}
-        readOnly
+        onKeyDown={(e) => e.stopPropagation()}
+        onChange={(e) => setLastResult(e.target.value)}
       />
 
       <div className={styles.doorRow}>
