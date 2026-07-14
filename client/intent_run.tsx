@@ -5,13 +5,13 @@
  * readintentlist.js CLI scripts), lets you pick one, edit its testArgs,
  * and run it, showing the result.
  *
- * The MCP endpoint (which embeds a personal access key in its query
- * string) is entered by the user into a field in this dialog and kept
- * only in their own browser's localStorage — never hardcoded here or
- * anywhere else in source. This repo auto-deploys to a public GitHub
- * Pages URL on every push (see .github/workflows/pages.yaml), so any
- * string committed to source is visible to every visitor; a working
- * secret must never be one of those strings.
+ * The MCP endpoint (which embeds an access key in its query string) has a
+ * hardcoded default (store/index.ts's DEFAULT_INTENT_MCP_URL) — this repo
+ * auto-deploys to a public GitHub Pages URL on every push, so that key is
+ * visible to any visitor and permanently in this repo's git history; it
+ * was committed at the user's explicit, repeated request after being
+ * warned of exactly that. The endpoint field below still overrides it
+ * per-browser via localStorage, same as every other persisted setting.
  */
 
 import { store, useAppStore } from "#asciiflow/client/store";
@@ -175,7 +175,7 @@ function IntentRunForm() {
   return (
     <div className={styles.drawPanel} style={{ width: "480px", maxWidth: "100%" }}>
       <TextField
-        label="MCP endpoint (saved only in this browser — never in the drawing or the repo)"
+        label="MCP endpoint (override saved only in this browser; a default is baked into this build)"
         value={mcpUrl}
         placeholder="https://your-worker.workers.dev/?accessKey=...&channel=mcp"
         autoFocus={!mcpUrl}

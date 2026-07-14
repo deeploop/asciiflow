@@ -167,6 +167,13 @@ setCustomCompositeDoorTemplatesModule(
   readPersistent<Record<string, CompositeDoorTemplate>>("customCompositeDoorTemplates", {})
 );
 
+// Default endpoint for the "run intent" dialog (client/intent_run.tsx).
+// See AppState.intentMcpUrl's comment: committed here at the user's
+// explicit, repeated request after being warned this repo deploys
+// publicly and the key would be permanently visible in git history.
+const DEFAULT_INTENT_MCP_URL =
+  "https://gas-mcp-proxy.tomtang12.workers.dev/?accessKey=qwe12326&channel=mcp";
+
 // ---------------------------------------------------------------------------
 // Zustand store
 // ---------------------------------------------------------------------------
@@ -204,12 +211,13 @@ export interface AppState {
   localDrawingIds: DrawingId[];
   darkMode: boolean;
   showGrid: boolean;
-  // The "run intent" dialog's MCP endpoint (includes the caller's own
-  // access key in its query string). Deliberately never given a default
-  // here or anywhere in source — this repo auto-deploys to a public
-  // GitHub Pages URL on every push, so a hardcoded key would be visible to
-  // any visitor. Stored only in the user's own browser localStorage, same
-  // as every other persisted setting on this list.
+  // The "run intent" dialog's MCP endpoint (includes an access key in its
+  // query string). This repo auto-deploys to a public GitHub Pages URL on
+  // every push, so this default is visible to any visitor of the deployed
+  // site and permanently recorded in this repo's git history — set at the
+  // user's explicit, repeated request after being warned of exactly that.
+  // Still overridable per-browser via the dialog's endpoint field, which
+  // persists to localStorage the same as every other setting on this list.
   intentMcpUrl: string;
 
   // Bumped whenever a CanvasStore mutates, so React can re-render.
@@ -261,7 +269,7 @@ function initialState(): AppState {
         window.matchMedia("(prefers-color-scheme: dark)").matches
     ),
     showGrid: readPersistent("showGrid", true),
-    intentMcpUrl: readPersistent("intentMcpUrl", ""),
+    intentMcpUrl: readPersistent("intentMcpUrl", DEFAULT_INTENT_MCP_URL),
     canvasVersion: 0,
   };
 }
