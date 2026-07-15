@@ -1,9 +1,13 @@
 /**
  * "Run intent" dialog — a debug/ops panel unrelated to diagram drawing:
- * lists IntentActions from a Google Apps Script MCP proxy (via the same
- * JSON-RPC-over-HTTP protocol as the reference run-intent.js/
- * readintentlist.js CLI scripts), lets you pick one, edit its testArgs,
- * and run it, showing the result.
+ * lists "AF_"-prefixed IntentActions (INTENT_NAME_PREFIX below) from a
+ * Google Apps Script MCP proxy (via the same JSON-RPC-over-HTTP protocol
+ * as the reference run-intent.js/readintentlist.js CLI scripts), lets you
+ * pick one, edit its testArgs, and run it, showing the result.
+ *
+ * testArgs and lastResult are both plain multi-line text, never JSON
+ * syntax the user has to read or type — see af_raw_format.ts for the
+ * {"raw": "..."} pack/unpack convention the "AF App" backend expects.
  *
  * The MCP endpoint (which embeds an access key in its query string) has a
  * hardcoded default (store/index.ts's DEFAULT_INTENT_MCP_URL) — this repo
@@ -14,6 +18,7 @@
  * per-browser via localStorage, same as every other persisted setting.
  */
 
+import { packRaw, unpackRaw, unpackRawJsonString } from "#asciiflow/client/af_raw_format";
 import { store, useAppStore } from "#asciiflow/client/store";
 import { Button, ControlledDialog, TextField } from "#asciiflow/client/ui/components";
 import styles from "#asciiflow/client/toolbar.module.css";
@@ -25,6 +30,9 @@ interface IntentSummary {
   intentDescription?: string;
   testArgs?: string;
 }
+
+/** Only intents meant for this "AF App" raw-text calling convention are shown. */
+const INTENT_NAME_PREFIX = "AF_";
 
 interface StatusMessage {
   message: string;
@@ -85,8 +93,13 @@ function IntentRunForm() {
     try {
       const result = await callMcpTool(url, "intent_action_list", {});
       const data = unwrapResult(result);
-      setIntents(data?.intents ?? []);
-      setStatus({ message: `Loaded ${data?.intents?.length ?? 0} intent(s).`, kind: "ok" });
+      const all: IntentSummary[] = data?.intents ?? [];
+      const filtered = all.filter((i) => i.intentName.startsWith(INTENT_NAME_PREFIX));
+      setIntents(filtered);
+      setStatus({
+        message: `Loaded ${filtered.length} "${INTENT_NAME_PREFIX}" intent(s) (${all.length} total on the sheet).`,
+        kind: "ok",
+      });
     } catch (e) {
       setStatus({ message: `Failed to load intent list: ${(e as Error).message}`, kind: "error" });
     } finally {
@@ -123,8 +136,8 @@ function IntentRunForm() {
         return;
       }
       setDescription(intent.intentDescription ?? "");
-      setTestArgs(intent.testArgs ?? "");
-      setLastResult(intent.lastResult ?? "");
+      setTestArgs(unpackRawJsonString(intent.testArgs));
+      setLastResult(unpackRawJsonString(intent.lastResult));
       setStatus({ message: "Ready.", kind: "ok" });
     } catch (e) {
       setStatus({ message: `Failed to load "${intentName}": ${(e as Error).message}`, kind: "error" });
@@ -135,30 +148,21 @@ function IntentRunForm() {
     if (!selected) {
       return;
     }
-    let args: unknown;
-    const raw = testArgs.trim();
-    if (raw !== "") {
-      try {
-        args = JSON.parse(raw);
-      } catch (e) {
-        setStatus({ message: `testArgs is not valid JSON: ${(e as Error).message}`, kind: "error" });
-        return;
-      }
-    }
+    // No JSON typing/validation needed any more — testArgs is plain
+    // multi-line text, auto-packed as {"raw": text}, the AF App standard
+    // input shape (af_raw_format.ts).
+    const args = packRaw(testArgs);
     setRunning(true);
     setStatus({ message: `Running "${selected}"…` });
     try {
-      const params: { intentName: string; args?: unknown } = { intentName: selected };
-      if (args !== undefined) {
-        params.args = args;
-      }
+      const params = { intentName: selected, args };
       const result = await callMcpTool(mcpUrl, "intent_action_run", params);
       const data = unwrapResult(result);
       // intent_action_run's payload is {ok, intentName, args, result} — the
       // sheet's lastResult column (and this box, when an intent is first
       // picked) only ever holds the plain `result` value.
       const value = data && typeof data === "object" && "result" in data ? data.result : data;
-      setLastResult(typeof value === "string" ? value : JSON.stringify(value, null, 2));
+      setLastResult(unpackRaw(value));
       setStatus(
         result?.isError
           ? { message: `"${selected}" returned an error — see result below.`, kind: "error" }
@@ -184,7 +188,7 @@ function IntentRunForm() {
       />
 
       <div className={styles.doorRow}>
-        <span className={styles.viewLabel}>intent:</span>
+        <span className={styles.viewLabel}>{INTENT_NAME_PREFIX} intent:</span>
         <select
           className={styles.compositeDoorInput}
           style={{ flex: 1, minWidth: 0 }}
@@ -195,7 +199,7 @@ function IntentRunForm() {
           <option value="">
             {!mcpUrl
               ? "enter an MCP endpoint above first"
-              : `select an intent… (${intents.length} found)`}
+              : `select an "${INTENT_NAME_PREFIX}" intent… (${intents.length} found)`}
           </option>
           {intents.map((intent) => (
             <option key={intent.intentName} value={intent.intentName}>
@@ -209,7 +213,9 @@ function IntentRunForm() {
       </div>
       {description && <div className={styles.drawHint}>{description}</div>}
 
-      <span className={styles.viewLabel}>testArgs (JSON):</span>
+      <span className={styles.viewLabel}>
+        testArgs (plain text — each line auto-packed as {"{"}"raw": "…"{"}"} when run):
+      </span>
       <textarea
         className={styles.compositeDoorTextarea}
         style={{ width: "100%", minHeight: "80px", boxSizing: "border-box" }}
@@ -218,7 +224,7 @@ function IntentRunForm() {
         onChange={(e) => setTestArgs(e.target.value)}
       />
 
-      <span className={styles.viewLabel}>lastResult:</span>
+      <span className={styles.viewLabel}>lastResult (plain text — auto-unpacked from {"{"}"raw": …{"}"}):</span>
       <textarea
         className={styles.compositeDoorTextarea}
         style={{ width: "100%", minHeight: "140px", boxSizing: "border-box" }}
@@ -257,12 +263,12 @@ export function IntentRunButton() {
         <button
           className={styles.actionBtn}
           style={{ color: "var(--color-brand)" }}
-          title="Run a Google Apps Script IntentAction (unrelated to drawing — a dev/ops utility)"
+          title={`Run an "${INTENT_NAME_PREFIX}"-prefixed Google Apps Script IntentAction (unrelated to drawing — a dev/ops utility)`}
         >
           [intent]
         </button>
       }
-      title="run intent"
+      title={`run ${INTENT_NAME_PREFIX} intent`}
     >
       <IntentRunForm />
     </ControlledDialog>
