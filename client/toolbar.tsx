@@ -1,7 +1,31 @@
 import { ASCII, UNICODE } from "#asciiflow/client/constants";
+import {
+  compositeDoorIdLabel,
+  nextCompositeDoorNumber,
+} from "#asciiflow/client/composite_door";
+import {
+  getActiveCompositeDoorTemplates,
+  parseCompositeDoorTemplateFile,
+} from "#asciiflow/client/composite_door_registry";
+import { parseDimensionFormula } from "#asciiflow/client/dimension_formula";
+import {
+  DOOR_DIRECTIONS,
+  DOOR_LABEL_OFFSET,
+  DoorTypeCode,
+  doorTemplate,
+  exportDoorsToXlsx,
+  getDoorTypes,
+  importDoorsFromXlsx,
+  nextDoorNumber,
+  parseDoorRegistryFile,
+  scanDoors,
+} from "#asciiflow/client/doors";
 import { ExportPanel } from "#asciiflow/client/export";
+import { IntentRunButton } from "#asciiflow/client/intent_run";
+import { Layer } from "#asciiflow/client/layer";
 import { DrawingId, store, ToolMode, useAppStore } from "#asciiflow/client/store";
 import { DrawingStringifier } from "#asciiflow/client/store/drawing_stringifier";
+import { textToLayer } from "#asciiflow/client/text_utils";
 import {
   Button,
   ControlledDialog,
@@ -54,6 +78,8 @@ const TOOLS: Array<{
   { mode: ToolMode.ARROWS, label: "arrow", testId: "tool-arrow", shortcut: "4", color: "var(--color-purple)" },
   { mode: ToolMode.LINES, label: "line", testId: "tool-line", shortcut: "5", color: "var(--color-accent)" },
   { mode: ToolMode.TEXT, label: "text", testId: "tool-text", shortcut: "6", color: "var(--color-warning)" },
+  { mode: ToolMode.DOOR, label: "door", testId: "tool-door", shortcut: "7", color: "var(--color-danger)" },
+  { mode: ToolMode.COMPOSITE_DOOR, label: "door+", testId: "tool-composite-door", shortcut: "8", color: "var(--color-brand)" },
 ];
 
 // Helper: stop all keyboard event propagation so controller doesn't intercept
@@ -98,7 +124,15 @@ export function Toolbar() {
   const showFreeformPicker =
     !isShared && selectedToolMode === ToolMode.FREEFORM && panel === null;
 
-  const showSecondRow = panel !== null || showFreeformPicker;
+  // The door tool shows its type/direction picker the same way.
+  const showDoorPicker =
+    !isShared && selectedToolMode === ToolMode.DOOR && panel === null;
+
+  const showCompositeDoorPicker =
+    !isShared && selectedToolMode === ToolMode.COMPOSITE_DOOR && panel === null;
+
+  const showSecondRow =
+    panel !== null || showFreeformPicker || showDoorPicker || showCompositeDoorPicker;
 
   return (
     <div className={styles.topBarWrapper}>
@@ -189,6 +223,11 @@ export function Toolbar() {
 
         <Sep />
 
+        {/* Run-intent dev/ops utility — unrelated to drawing, see intent_run.tsx */}
+        <IntentRunButton />
+
+        <Sep />
+
         {/* Help — far right */}
         <PanelBtn id="help" current={panel} onClick={togglePanel}>
           help
@@ -207,6 +246,8 @@ export function Toolbar() {
           {panel === "export" && <ExportPanel drawingId={route} />}
           {panel === "view" && <ViewPanel />}
           {showFreeformPicker && <DrawPanel />}
+          {showDoorPicker && <DoorPanel />}
+          {showCompositeDoorPicker && <CompositeDoorPanel />}
         </div>
       )}
     </div>
@@ -384,6 +425,431 @@ function DrawPanel() {
 }
 
 // ---------------------------------------------------------------------------
+// Door panel — type / direction pickers + Excel (CSV) import/export
+// ---------------------------------------------------------------------------
+
+function DoorPanel() {
+  const doorType = useAppStore((s) => s.doorType);
+  const doorDirection = useAppStore((s) => s.doorDirection);
+  // Re-render whenever a custom door definition file is loaded/cleared —
+  // getDoorTypes() below reads live module state, not React state, so this
+  // counter is what actually makes the menu update.
+  useAppStore((s) => s.doorRegistryVersion);
+  const doorTypes = getDoorTypes();
+  const hasCustomDoorTypes = Object.keys(store.customDoorRegistry).length > 0;
+  const [toastMessage, setToastMessage] = useState<string>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const registryFileInputRef = useRef<HTMLInputElement>(null);
+
+  async function handleLoadRegistry(file: File) {
+    const text = await file.text();
+    const { registry, errors } = parseDoorRegistryFile(text);
+    const loadedCodes = Object.keys(registry);
+    if (loadedCodes.length > 0) {
+      store.loadCustomDoorTypes(registry);
+    }
+    if (loadedCodes.length === 0) {
+      setToastMessage(
+        errors.length > 0
+          ? `no door types loaded — ${errors[0]}`
+          : "no door types found in file"
+      );
+    } else {
+      setToastMessage(
+        `loaded ${loadedCodes.length} door type(s): ${loadedCodes.join(", ")}` +
+          (errors.length > 0 ? ` (${errors.length} rejected, see console)` : "")
+      );
+      if (errors.length > 0) {
+        // tslint:disable-next-line: no-console
+        console.warn("door registry entries rejected:", errors);
+      }
+    }
+  }
+
+  function handleExport() {
+    const doors = scanDoors(store.currentCanvas.committed);
+    if (doors.length === 0) {
+      setToastMessage("no doors on the canvas to export");
+      return;
+    }
+    exportDoorsToXlsx(doors);
+    setToastMessage(`exported ${doors.length} door(s) to excel`);
+  }
+
+  async function handleImport(file: File) {
+    let doors, skipped;
+    try {
+      ({ doors, skipped } = await importDoorsFromXlsx(file));
+    } catch (e) {
+      setToastMessage("could not read file as an excel workbook");
+      return;
+    }
+    if (doors.length === 0) {
+      setToastMessage("no valid door rows found in file");
+      return;
+    }
+    // Stamp every door into one layer so the whole import is a single undo.
+    const layer = new Layer();
+    const counters = new Map<DoorTypeCode, number>();
+    for (const row of doors) {
+      let num = row.num;
+      if (num === undefined) {
+        num =
+          counters.get(row.type) ??
+          nextDoorNumber(store.currentCanvas.committed, row.type);
+        counters.set(row.type, num + 1);
+      }
+      layer.setFrom(
+        textToLayer(
+          doorTemplate(row.type, row.direction, num),
+          row.position.subtract(DOOR_LABEL_OFFSET)
+        )
+      );
+    }
+    store.currentCanvas.setScratchLayer(layer);
+    store.currentCanvas.commitScratch();
+    setToastMessage(
+      `imported ${doors.length} door(s)` +
+        (skipped > 0 ? `, skipped ${skipped} row(s)` : "")
+    );
+  }
+
+  return (
+    <div className={styles.drawPanel}>
+      <div className={styles.doorRow}>
+        <span className={styles.viewLabel}>type:</span>
+        {doorTypes.map((type) => (
+          <button
+            key={type.code}
+            className={[
+              styles.doorBtn,
+              type.code === doorType ? styles.doorBtnActive : "",
+            ].filter(Boolean).join(" ")}
+            title={`${type.nameZh} ${type.nameEn}`}
+            onClick={() => store.setDoorType(type.code)}
+          >
+            {type.code} {type.nameZh}
+          </button>
+        ))}
+        <span className={styles.sep}>{"│"}</span>
+        <ActionBtn
+          color="var(--color-warning)"
+          title="Load new door types from a .json or .txt definition file (載入門型定義檔)"
+          onClick={() => registryFileInputRef.current?.click()}
+        >
+          load door types
+        </ActionBtn>
+        {hasCustomDoorTypes && (
+          <ActionBtn
+            color="var(--color-danger)"
+            title="Remove all custom-loaded door types, keep only the built-ins (清除自訂門型)"
+            onClick={() => {
+              store.resetCustomDoorTypes();
+              setToastMessage("custom door types cleared");
+            }}
+          >
+            reset custom types
+          </ActionBtn>
+        )}
+        <input
+          ref={registryFileInputRef}
+          type="file"
+          accept=".json,.txt"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) {
+              handleLoadRegistry(file);
+            }
+            e.target.value = "";
+          }}
+        />
+      </div>
+      <div className={styles.doorRow}>
+        <span className={styles.viewLabel}>swing:</span>
+        {DOOR_DIRECTIONS.map((direction) => (
+          <button
+            key={direction.code}
+            className={[
+              styles.doorBtn,
+              direction.code === doorDirection ? styles.doorBtnActive : "",
+            ].filter(Boolean).join(" ")}
+            title={`${direction.nameZh} ${direction.nameEn}`}
+            onClick={() => store.setDoorDirection(direction.code)}
+          >
+            {direction.code} {direction.nameZh}
+          </button>
+        ))}
+        <span className={styles.sep}>{"│"}</span>
+        <ActionBtn
+          color="var(--color-success)"
+          title="Export door schedule as Excel .xlsx (匯出門表)"
+          onClick={handleExport}
+        >
+          export excel
+        </ActionBtn>
+        <ActionBtn
+          color="var(--color-accent)"
+          title="Import door schedule from Excel .xlsx or CSV (匯入門表)"
+          onClick={() => fileInputRef.current?.click()}
+        >
+          import excel
+        </ActionBtn>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".xlsx,.xls,.csv"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) {
+              handleImport(file);
+            }
+            e.target.value = "";
+          }}
+        />
+      </div>
+      <div className={styles.drawHint}>
+        click the canvas to place a <strong>{doorType}-{doorDirection}</strong> door
+        {" │ "}keys <Kbd>1</Kbd>–<Kbd>9</Kbd> change type (by position), arrow keys change swing
+      </div>
+      <Toast
+        open={toastMessage !== null}
+        message={toastMessage ?? ""}
+        onClose={() => setToastMessage(null)}
+      />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Composite door panel — box/lock/dimension settings for the "door+" stamp
+// tool, which places a whole box+lock+chains+description unit per click.
+// ---------------------------------------------------------------------------
+
+function NumberField({
+  label,
+  value,
+  onChange,
+  min = 1,
+}: {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+  min?: number;
+}) {
+  return (
+    <label className={styles.compositeDoorField}>
+      <span className={styles.viewLabel}>{label}</span>
+      <input
+        type="number"
+        className={styles.compositeDoorInput}
+        value={value}
+        min={min}
+        onKeyDown={stopKeys}
+        onChange={(e) => {
+          const parsed = parseInt(e.target.value, 10);
+          if (!isNaN(parsed) && parsed >= min) {
+            onChange(parsed);
+          }
+        }}
+      />
+    </label>
+  );
+}
+
+/**
+ * Multi-line dimension formula box: first line is the base value, every
+ * line after it a signed delta ("+18"/"-45") — see dimension_formula.ts.
+ * Shows the live-computed total next to the label so you see the result
+ * (e.g. "= 2384") without having to compute it yourself or place the door
+ * first.
+ */
+function FormulaField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const { total, errors } = parseDimensionFormula(value);
+  return (
+    <label className={styles.compositeDoorField}>
+      <span className={styles.viewLabel}>
+        {label} {errors.length === 0 && <span className={styles.compositeDoorTotal}>= {total}</span>}
+      </span>
+      <textarea
+        className={styles.compositeDoorTextarea}
+        value={value}
+        rows={3}
+        title="first line is the base value; every line after it must be a signed delta, e.g. +18 or -45"
+        onKeyDown={(e) => {
+          // Let Enter insert a newline (multi-line input) instead of being
+          // swallowed by stopKeys' usual single-line handling, but still
+          // stop every other key from reaching the canvas' global shortcuts.
+          e.stopPropagation();
+        }}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </label>
+  );
+}
+
+function CompositeDoorPanel() {
+  const settings = useAppStore((s) => s.compositeDoor);
+  const canvasVersion = useAppStore((s) => s.canvasVersion);
+  // Re-render whenever a custom template file is loaded/cleared —
+  // getActiveCompositeDoorTemplates() below reads live module state, not
+  // React state, so this counter is what actually makes the menu update.
+  useAppStore((s) => s.compositeDoorTemplateRegistryVersion);
+  const templates = getActiveCompositeDoorTemplates();
+  const hasCustomTemplates =
+    Object.keys(store.customCompositeDoorTemplates).length > 0;
+  const nextNum = nextCompositeDoorNumber(store.currentCanvas.committed);
+  const [toastMessage, setToastMessage] = useState<string>(null);
+  const templateFileInputRef = useRef<HTMLInputElement>(null);
+
+  async function handleLoadTemplates(file: File) {
+    const text = await file.text();
+    const { registry, errors } = parseCompositeDoorTemplateFile(text);
+    const loadedNames = Object.keys(registry);
+    if (loadedNames.length > 0) {
+      store.loadCustomCompositeDoorTemplates(registry);
+    }
+    if (loadedNames.length === 0) {
+      setToastMessage(
+        errors.length > 0
+          ? `no templates loaded — ${errors[0]}`
+          : "no templates found in file"
+      );
+    } else {
+      setToastMessage(
+        `loaded ${loadedNames.length} template(s): ${loadedNames.join(", ")}` +
+          (errors.length > 0 ? ` (${errors.length} rejected, see console)` : "")
+      );
+      if (errors.length > 0) {
+        // tslint:disable-next-line: no-console
+        console.warn("composite door template entries rejected:", errors);
+      }
+    }
+  }
+
+  return (
+    <div className={styles.drawPanel}>
+      <div className={styles.doorRow}>
+        <span className={styles.viewLabel}>template:</span>
+        {templates.map((template) => (
+          <button
+            key={template.name}
+            className={styles.doorBtn}
+            title={`box ${template.boxWidth}x${template.boxHeight}, lock ${template.lockSide}`}
+            onClick={() => store.applyCompositeDoorTemplate(template)}
+          >
+            {template.name}
+          </button>
+        ))}
+        <span className={styles.sep}>{"│"}</span>
+        <ActionBtn
+          color="var(--color-warning)"
+          title="Load new composite door templates from a .json definition file"
+          onClick={() => templateFileInputRef.current?.click()}
+        >
+          load templates
+        </ActionBtn>
+        {hasCustomTemplates && (
+          <ActionBtn
+            color="var(--color-danger)"
+            title="Remove all custom-loaded templates, keep only the built-ins"
+            onClick={() => {
+              store.resetCustomCompositeDoorTemplates();
+              setToastMessage("custom templates cleared");
+            }}
+          >
+            reset templates
+          </ActionBtn>
+        )}
+        <input
+          ref={templateFileInputRef}
+          type="file"
+          accept=".json"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) {
+              handleLoadTemplates(file);
+            }
+            e.target.value = "";
+          }}
+        />
+      </div>
+      <div className={styles.doorRow}>
+        <NumberField
+          label="box w:"
+          value={settings.boxWidth}
+          onChange={(boxWidth) => store.setCompositeDoor({ boxWidth })}
+        />
+        <NumberField
+          label="box h:"
+          value={settings.boxHeight}
+          onChange={(boxHeight) => store.setCompositeDoor({ boxHeight })}
+        />
+        <span className={styles.sep}>{"│"}</span>
+        <span className={styles.viewLabel}>lock:</span>
+        {(["left", "right"] as const).map((side) => (
+          <button
+            key={side}
+            className={[
+              styles.doorBtn,
+              settings.lockSide === side ? styles.doorBtnActive : "",
+            ].filter(Boolean).join(" ")}
+            onClick={() => store.setCompositeDoorLockSide(side)}
+          >
+            {side}
+          </button>
+        ))}
+      </div>
+      <div className={styles.doorRow}>
+        <button
+          className={[
+            styles.doorBtn,
+            settings.showDimensions ? styles.doorBtnActive : "",
+          ].filter(Boolean).join(" ")}
+          onClick={() => store.setCompositeDoor({ showDimensions: !settings.showDimensions })}
+        >
+          dimensions: {settings.showDimensions ? "on" : "off"}
+        </button>
+        {settings.showDimensions && (
+          <>
+            <FormulaField
+              label="height:"
+              value={settings.heightFormula}
+              onChange={(heightFormula) => store.setCompositeDoor({ heightFormula })}
+            />
+            <FormulaField
+              label="width:"
+              value={settings.widthFormula}
+              onChange={(widthFormula) => store.setCompositeDoor({ widthFormula })}
+            />
+          </>
+        )}
+      </div>
+      <div className={styles.drawHint}>
+        click the canvas to place door <strong>{compositeDoorIdLabel(nextNum)}</strong>
+        {" │ "}arrow keys ← / → change which edge the lock is on
+        {" │ "}dimension boxes: first line is the base value, following lines are +/- deltas
+      </div>
+      <Toast
+        open={toastMessage !== null}
+        message={toastMessage ?? ""}
+        onClose={() => setToastMessage(null)}
+      />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Help content (table layout with colored shortcuts and links)
 // ---------------------------------------------------------------------------
 
@@ -412,6 +878,10 @@ function HelpContent() {
         <span>drag start to end. <Kbd>shift</Kbd> changes orientation</span>
         <span style={{ color: "var(--color-warning)" }}>text</span>
         <span>click and type. <Kbd>enter</Kbd> commit, <Kbd>shift+enter</Kbd> newline</span>
+        <span style={{ color: "var(--color-danger)" }}>door</span>
+        <span>click to stamp a door symbol. export/import the door schedule as excel (.xlsx), or load more door types from a .json/.txt definition file</span>
+        <span style={{ color: "var(--color-brand)" }}>door+</span>
+        <span>click to stamp a composite door item: box + lock + dimension chains + auto-numbered ID, as one movable unit. pick a preset from the template menu or load more from a .json file; height/width accept a multi-line base+delta formula</span>
       </div>
       <div className={styles.helpDivider} />
       <div className={styles.helpSection}>navigation</div>

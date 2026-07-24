@@ -1,4 +1,21 @@
+import {
+  clearCustomCompositeDoorTemplates as clearCustomCompositeDoorTemplatesModule,
+  CompositeDoorTemplate,
+  getCustomCompositeDoorTemplates,
+  setCustomCompositeDoorTemplates as setCustomCompositeDoorTemplatesModule,
+} from "#asciiflow/client/composite_door_registry";
+import {
+  clearCustomDoorRegistry as clearCustomDoorRegistryModule,
+  DoorConfig,
+  DoorDirectionCode,
+  DoorTypeCode,
+  getActiveDoorTypeCodes,
+  getCustomDoorRegistry,
+  setCustomDoorRegistry as setCustomDoorRegistryModule,
+} from "#asciiflow/client/doors";
 import { DrawBox } from "#asciiflow/client/draw/box";
+import { DrawCompositeDoor } from "#asciiflow/client/draw/composite_door";
+import { DrawDoor } from "#asciiflow/client/draw/door";
 import { DrawFreeform } from "#asciiflow/client/draw/freeform";
 import { IDrawFunction } from "#asciiflow/client/draw/function";
 import { DrawLine } from "#asciiflow/client/draw/line";
@@ -21,7 +38,29 @@ export enum ToolMode {
   ARROWS = 6,
   LINES = 4,
   TEXT = 7,
+  DOOR = 8,
+  COMPOSITE_DOOR = 9,
 }
+
+export interface ICompositeDoorSettings {
+  boxWidth: number;
+  boxHeight: number;
+  lockSide: "left" | "right";
+  showDimensions: boolean;
+  /** Multi-line dimension formula text — see dimension_formula.ts. */
+  heightFormula: string;
+  /** Multi-line dimension formula text — see dimension_formula.ts. */
+  widthFormula: string;
+}
+
+const DEFAULT_COMPOSITE_DOOR: ICompositeDoorSettings = {
+  boxWidth: 14,
+  boxHeight: 6,
+  lockSide: "left",
+  showDimensions: true,
+  heightFormula: "2400",
+  widthFormula: "900",
+};
 
 export interface IModifierKeys {
   shift?: boolean;
@@ -104,6 +143,11 @@ function readPersistent<T>(
   }
 }
 
+function validDoorType(type: DoorTypeCode): DoorTypeCode {
+  const codes = getActiveDoorTypeCodes();
+  return codes.includes(type) ? type : codes[0];
+}
+
 function writePersistent<T>(
   key: string,
   value: T,
@@ -111,6 +155,24 @@ function writePersistent<T>(
 ): void {
   localStorage.setItem(key, stringifier.serialize(value));
 }
+
+// Hydrate any door types loaded from a definition file in a previous
+// session, before initialState() below computes the default doorType — so
+// a previously-loaded custom type is still selectable (and can still be the
+// default) after a reload, without waiting for the toolbar to mount.
+setCustomDoorRegistryModule(
+  readPersistent<Record<string, DoorConfig>>("customDoorRegistry", {})
+);
+setCustomCompositeDoorTemplatesModule(
+  readPersistent<Record<string, CompositeDoorTemplate>>("customCompositeDoorTemplates", {})
+);
+
+// Default endpoint for the "run intent" dialog (client/intent_run.tsx).
+// See AppState.intentMcpUrl's comment: committed here at the user's
+// explicit, repeated request after being warned this repo deploys
+// publicly and the key would be permanently visible in git history.
+const DEFAULT_INTENT_MCP_URL =
+  "https://gas-mcp-proxy.tomtang12.workers.dev/?accessKey=qwe12326&channel=mcp";
 
 // ---------------------------------------------------------------------------
 // Zustand store
@@ -123,6 +185,18 @@ export interface AppState {
   // Tool state
   selectedToolMode: ToolMode;
   freeformCharacter: string;
+  doorType: DoorTypeCode;
+  doorDirection: DoorDirectionCode;
+  // Bumped whenever the custom door registry changes, so React re-renders
+  // the door menu — the registry itself lives in module state (doors.ts),
+  // not here, since the pure functions in doors.ts read it directly and
+  // shouldn't depend on the Zustand store. This counter exists purely to
+  // give components something to subscribe to.
+  doorRegistryVersion: number;
+  compositeDoor: ICompositeDoorSettings;
+  // Same purpose as doorRegistryVersion, for the composite-door template
+  // registry (composite_door_registry.ts).
+  compositeDoorTemplateRegistryVersion: number;
   altPressed: boolean;
   currentCursor: string;
   modifierKeys: IModifierKeys;
@@ -137,6 +211,14 @@ export interface AppState {
   localDrawingIds: DrawingId[];
   darkMode: boolean;
   showGrid: boolean;
+  // The "run intent" dialog's MCP endpoint (includes an access key in its
+  // query string). This repo auto-deploys to a public GitHub Pages URL on
+  // every push, so this default is visible to any visitor of the deployed
+  // site and permanently recorded in this repo's git history — set at the
+  // user's explicit, repeated request after being warned of exactly that.
+  // Still overridable per-browser via the dialog's endpoint field, which
+  // persists to localStorage the same as every other setting on this list.
+  intentMcpUrl: string;
 
   // Bumped whenever a CanvasStore mutates, so React can re-render.
   canvasVersion: number;
@@ -147,6 +229,25 @@ function initialState(): AppState {
     route: DrawingId.local(null),
     selectedToolMode: ToolMode.BOX,
     freeformCharacter: "x",
+    // Fall back to the registry's first type if nothing is stored, or if a
+    // stored value refers to a type that's since been removed from the
+    // registry (stale localStorage) — never trust a persisted code blindly.
+    doorType: validDoorType(
+      readPersistent<DoorTypeCode>("doorType", getActiveDoorTypeCodes()[0])
+    ),
+    doorDirection: readPersistent<DoorDirectionCode>("doorDirection", "IL"),
+    doorRegistryVersion: 0,
+    // Merged over the defaults (rather than falling back to them wholesale)
+    // so a pre-existing localStorage blob from before heightFormula/
+    // widthFormula existed (the old shape had heightValue/widthValue
+    // instead) still comes out with valid formula fields — the old keys
+    // just become harmless leftovers, and the new ones fall back to
+    // DEFAULT_COMPOSITE_DOOR since they were never present to override it.
+    compositeDoor: {
+      ...DEFAULT_COMPOSITE_DOOR,
+      ...readPersistent<Partial<ICompositeDoorSettings>>("compositeDoor", {}),
+    },
+    compositeDoorTemplateRegistryVersion: 0,
     altPressed: false,
     currentCursor: "default",
     modifierKeys: {},
@@ -168,6 +269,7 @@ function initialState(): AppState {
         window.matchMedia("(prefers-color-scheme: dark)").matches
     ),
     showGrid: readPersistent("showGrid", true),
+    intentMcpUrl: readPersistent("intentMcpUrl", DEFAULT_INTENT_MCP_URL),
     canvasVersion: 0,
   };
 }
@@ -190,6 +292,8 @@ const arrowTool = new DrawLine(true);
 const selectTool = new DrawSelect();
 const freeformTool = new DrawFreeform();
 const textTool = new DrawText();
+const doorTool = new DrawDoor();
+const compositeDoorTool = new DrawCompositeDoor();
 const nullTool = new DrawNull();
 
 // ---------------------------------------------------------------------------
@@ -238,6 +342,8 @@ export const store = {
   selectTool,
   freeformTool,
   textTool,
+  doorTool,
+  compositeDoorTool,
   nullTool,
 
   // Route
@@ -254,6 +360,100 @@ export const store = {
   },
   setFreeformCharacter(value: string) {
     useAppStore.setState({ freeformCharacter: value });
+  },
+
+  // Door stamp settings (persistent)
+  get doorType() {
+    return useAppStore.getState().doorType;
+  },
+  setDoorType(value: DoorTypeCode) {
+    setPersistent("doorType", value);
+  },
+  get doorDirection() {
+    return useAppStore.getState().doorDirection;
+  },
+  setDoorDirection(value: DoorDirectionCode) {
+    setPersistent("doorDirection", value);
+  },
+
+  // Custom door registry (runtime-loaded, persisted). The registry data
+  // itself lives in doors.ts module state; this just keeps it in sync with
+  // localStorage and bumps doorRegistryVersion so subscribers re-render.
+  // Callers must have already validated every entry (see
+  // validateDoorConfig/parseDoorRegistryFile in doors.ts) — this does not
+  // re-validate.
+  get customDoorRegistry() {
+    return getCustomDoorRegistry();
+  },
+  get doorRegistryVersion() {
+    return useAppStore.getState().doorRegistryVersion;
+  },
+  loadCustomDoorTypes(registry: Record<string, DoorConfig>) {
+    const merged = { ...getCustomDoorRegistry(), ...registry };
+    setCustomDoorRegistryModule(merged);
+    writePersistent("customDoorRegistry", merged);
+    useAppStore.setState((s) => ({
+      doorRegistryVersion: s.doorRegistryVersion + 1,
+      doorType: validDoorType(s.doorType),
+    }));
+  },
+  resetCustomDoorTypes() {
+    clearCustomDoorRegistryModule();
+    writePersistent("customDoorRegistry", {});
+    useAppStore.setState((s) => ({
+      doorRegistryVersion: s.doorRegistryVersion + 1,
+      doorType: validDoorType(s.doorType),
+    }));
+  },
+
+  // Composite door stamp settings (persistent)
+  get compositeDoor() {
+    return useAppStore.getState().compositeDoor;
+  },
+  setCompositeDoor(patch: Partial<ICompositeDoorSettings>) {
+    setPersistent("compositeDoor", { ...useAppStore.getState().compositeDoor, ...patch });
+  },
+  setCompositeDoorLockSide(side: "left" | "right") {
+    store.setCompositeDoor({ lockSide: side });
+  },
+
+  // Custom composite-door template registry (runtime-loaded, persisted).
+  // Same pattern as customDoorRegistry above: the registry data lives in
+  // composite_door_registry.ts module state, this keeps it in sync with
+  // localStorage and bumps compositeDoorTemplateRegistryVersion so the
+  // template menu re-renders. Callers must have already validated every
+  // entry (see parseCompositeDoorTemplateFile) — this does not re-validate.
+  get customCompositeDoorTemplates() {
+    return getCustomCompositeDoorTemplates();
+  },
+  get compositeDoorTemplateRegistryVersion() {
+    return useAppStore.getState().compositeDoorTemplateRegistryVersion;
+  },
+  loadCustomCompositeDoorTemplates(registry: Record<string, CompositeDoorTemplate>) {
+    const merged = { ...getCustomCompositeDoorTemplates(), ...registry };
+    setCustomCompositeDoorTemplatesModule(merged);
+    writePersistent("customCompositeDoorTemplates", merged);
+    useAppStore.setState((s) => ({
+      compositeDoorTemplateRegistryVersion: s.compositeDoorTemplateRegistryVersion + 1,
+    }));
+  },
+  resetCustomCompositeDoorTemplates() {
+    clearCustomCompositeDoorTemplatesModule();
+    writePersistent("customCompositeDoorTemplates", {});
+    useAppStore.setState((s) => ({
+      compositeDoorTemplateRegistryVersion: s.compositeDoorTemplateRegistryVersion + 1,
+    }));
+  },
+  /** Prefills the composite-door panel from a named template — still freely editable afterward. */
+  applyCompositeDoorTemplate(template: CompositeDoorTemplate) {
+    store.setCompositeDoor({
+      boxWidth: template.boxWidth,
+      boxHeight: template.boxHeight,
+      lockSide: template.lockSide,
+      showDimensions: Boolean(template.heightFormula || template.widthFormula),
+      heightFormula: template.heightFormula ?? DEFAULT_COMPOSITE_DOOR.heightFormula,
+      widthFormula: template.widthFormula ?? DEFAULT_COMPOSITE_DOOR.widthFormula,
+    });
   },
 
   // Selected tool mode
@@ -289,6 +489,10 @@ export const store = {
       ? freeformTool
       : mode === ToolMode.TEXT
       ? textTool
+      : mode === ToolMode.DOOR
+      ? doorTool
+      : mode === ToolMode.COMPOSITE_DOOR
+      ? compositeDoorTool
       : mode === ToolMode.SELECT
       ? selectTool
       : nullTool;
@@ -337,6 +541,14 @@ export const store = {
   },
   setShowGrid(value: boolean) {
     setPersistent("showGrid", value);
+  },
+
+  // "Run intent" dialog's MCP endpoint (persistent, browser-local only — see AppState's comment).
+  get intentMcpUrl() {
+    return useAppStore.getState().intentMcpUrl;
+  },
+  setIntentMcpUrl(value: string) {
+    setPersistent("intentMcpUrl", value);
   },
 
   // Unicode (persistent)

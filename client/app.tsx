@@ -4,10 +4,11 @@ import styles from "#asciiflow/client/app.module.css";
 import {
   Controller,
   InputController,
+  isInputTarget,
 } from "#asciiflow/client/controller";
 import { Toolbar } from "#asciiflow/client/toolbar";
 import { DrawingId, store, ToolMode, useAppStore } from "#asciiflow/client/store";
-import { renderedVersion, screenToCell, View } from "#asciiflow/client/view";
+import { cellToScreen, renderedVersion, screenToCell, View } from "#asciiflow/client/view";
 import { initFont } from "#asciiflow/client/font";
 
 import { HashRouter, Route, useParams } from "react-router-dom";
@@ -69,6 +70,24 @@ async function render() {
   getZoom: () => store.currentCanvas.zoom,
   getOffset: () => ({ x: store.currentCanvas.offset.x, y: store.currentCanvas.offset.y }),
   getCellSize: () => ({ w: CHAR_PIXELS_H, h: CHAR_PIXELS_V }),
+  // Precise cell<->screen conversion for e2e tests that need to click a
+  // specific grid cell — avoids each test hand-replicating view.tsx's
+  // zoom/offset math (a past source of test-coordinate bugs).
+  cellToScreen: (x: number, y: number) => {
+    const p = cellToScreen(new Vector(x, y));
+    return { x: p.x, y: p.y };
+  },
+  screenToCell: (x: number, y: number) => {
+    const p = screenToCell(new Vector(x, y));
+    return { x: p.x, y: p.y };
+  },
+  getSelectionBox: () => {
+    const box = store.currentCanvas.selection;
+    return box
+      ? { left: box.left(), top: box.top(), right: box.right(), bottom: box.bottom() }
+      : null;
+  },
+  getCellValue: (x: number, y: number) => store.currentCanvas.committed.get(new Vector(x, y)),
 };
 
 // tslint:disable-next-line: no-console
@@ -88,7 +107,15 @@ document.getElementById("root").addEventListener(
 
 // Use native copy/cut events so the browser handles clipboard permissions.
 // This works across Chrome, Safari, and Firefox (including macOS).
+//
+// Each handler bails out early when the event's target is a plain text
+// field (isInputTarget — same check controller.ts uses to keep keyboard
+// shortcuts out of text fields) so copy/cut/paste inside any <input> or
+// <textarea> in the app — the run-intent dialog's endpoint/testArgs
+// fields, the drawing-rename field, etc. — falls through to the browser's
+// normal editing behavior instead of being redirected to the canvas.
 document.addEventListener("copy", (e) => {
+  if (isInputTarget(e)) return;
   if (store.selectTool.selectBox) {
     e.preventDefault();
     const copiedText = layerToText(
@@ -100,6 +127,7 @@ document.addEventListener("copy", (e) => {
 });
 
 document.addEventListener("cut", (e) => {
+  if (isInputTarget(e)) return;
   if (store.selectTool.selectBox) {
     e.preventDefault();
     const copiedText = layerToText(
@@ -113,6 +141,7 @@ document.addEventListener("cut", (e) => {
 });
 
 document.addEventListener("paste", (e) => {
+  if (isInputTarget(e)) return;
   e.preventDefault();
   const clipboardText = e.clipboardData.getData("text");
   // Default to the center of the screen.

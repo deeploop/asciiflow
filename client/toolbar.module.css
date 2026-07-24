@@ -271,6 +271,84 @@
   color: var(--color-text);
 }
 
+/* --- Door panel (in second row) --- */
+
+.doorRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+  min-width: 0;
+}
+
+.doorBtn {
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+  padding: 2px 8px;
+  background: none;
+  border: 1px solid transparent;
+  color: var(--color-text);
+  cursor: pointer;
+  flex-shrink: 0;
+  outline: none;
+  white-space: nowrap;
+}
+
+.doorBtn:hover {
+  background: var(--color-bg-hover);
+  border-color: var(--color-border-light);
+}
+
+.doorBtnActive {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  font-weight: bold;
+}
+
+/* --- Composite door panel number fields --- */
+
+.compositeDoorField {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.compositeDoorInput {
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+  width: 4.5em;
+  background: none;
+  border: 1px solid var(--color-border-light);
+  color: var(--color-text);
+  padding: 1px 4px;
+  outline: none;
+}
+
+.compositeDoorInput:focus {
+  border-color: var(--color-accent);
+}
+
+.compositeDoorTextarea {
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+  width: 6em;
+  background: none;
+  border: 1px solid var(--color-border-light);
+  color: var(--color-text);
+  padding: 1px 4px;
+  outline: none;
+  resize: vertical;
+}
+
+.compositeDoorTextarea:focus {
+  border-color: var(--color-accent);
+}
+
+.compositeDoorTotal {
+  color: var(--color-text-muted);
+}
+
 /* --- Character picker (in second row) --- */
 
 .charPicker {

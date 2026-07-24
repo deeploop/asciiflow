@@ -1,0 +1,18 @@
+[
+  {
+    "name": "FR-fire-door",
+    "boxWidth": 18,
+    "boxHeight": 12,
+    "lockSide": "left",
+    "heightFormula": "2439\n-45\n-10",
+    "widthFormula": "1114\n+18\n+7\n+24"
+  },
+  {
+    "name": "narrow-900",
+    "boxWidth": 12,
+    "boxHeight": 8,
+    "lockSide": "right",
+    "heightFormula": "2100",
+    "widthFormula": "900\n+10"
+  }
+]
